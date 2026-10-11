@@ -56,6 +56,8 @@
   --z-garden: #8fbf94;
   --z-bar: #ff9a5c;
   --z-private: #d77aa0;
+  --z-rooftop: #7fb4e8;
+  --z-patio: #c9a0f0;
 
   --shadow-card: 0 30px 80px -30px rgb(0 0 0 / 0.85);
   --inner-glow: inset 0 1px 0 0 rgb(255 255 255 / 0.07), inset 0 0 0 1px rgb(255 255 255 / 0.015),
@@ -112,6 +114,8 @@
   --z-garden: #4f8a5b;
   --z-bar: #c8541f;
   --z-private: #9b3463;
+  --z-rooftop: #2f6fa8;
+  --z-patio: #6f4aa8;
 
   --shadow-card: 0 30px 70px -35px rgb(110 50 20 / 0.35);
   --inner-glow: inset 0 1px 0 0 rgb(255 255 255 / 0.85), inset 0 -60px 90px -60px rgb(224 88 42 / 0.1);
@@ -716,4 +720,73 @@
     animation-iteration-count: 1 !important;
     transition-duration: 0.001ms !important;
   }
+}
+
+/* Restaurant docs (About / Menu / Policies markdown) */
+.prose-doc {
+  overflow-wrap: anywhere;
+  line-height: 1.7;
+  color: var(--fg-muted);
+}
+.prose-doc > * + * {
+  margin-top: 0.85em;
+}
+.prose-doc h1,
+.prose-doc h2,
+.prose-doc h3 {
+  font-family: var(--font-display);
+  color: var(--fg);
+  line-height: 1.2;
+}
+.prose-doc h1 {
+  font-size: 1.9rem;
+}
+.prose-doc h2 {
+  margin-top: 1.4em;
+  font-size: 1.45rem;
+}
+.prose-doc h3 {
+  margin-top: 1.2em;
+  font-size: 1.15rem;
+  color: var(--gold);
+}
+.prose-doc ul {
+  list-style: disc;
+  padding-left: 1.2em;
+}
+.prose-doc ol {
+  list-style: decimal;
+  padding-left: 1.3em;
+}
+.prose-doc li + li {
+  margin-top: 0.3em;
+}
+.prose-doc li::marker {
+  color: var(--ember);
+}
+.prose-doc strong {
+  font-weight: 600;
+  color: var(--fg);
+}
+.prose-doc em {
+  font-style: italic;
+}
+.prose-doc a {
+  color: var(--ember);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+.prose-doc table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.9em;
+}
+.prose-doc th,
+.prose-doc td {
+  border-bottom: 1px solid var(--line);
+  padding: 0.45em 0.6em;
+  text-align: left;
+}
+.prose-doc hr {
+  border-color: var(--line);
 }

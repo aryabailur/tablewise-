@@ -1,16 +1,18 @@
 import { Fragment, memo, useCallback, useEffect, useRef, useState } from 'react';
 import { AnimatePresence, motion } from 'framer-motion';
 import Markdown from 'react-markdown';
-import { ArrowUp, BookOpen, Check, CircleAlert, LoaderCircle, Sparkles, Square, SquarePen, X } from 'lucide-react';
-import type { Booking, ChatEvent, GraphNode, Health, Source } from '../lib/types';
+import { ArrowUp, BookOpen, Check, CircleAlert, LoaderCircle, Sparkles, Square, SquarePen, Store, X } from 'lucide-react';
+import type { Booking, ChatEvent, GraphNode, Health, RestaurantListItem, Source } from '../lib/types';
 import { errorMessage, getHealth, notifyBookingsChanged, streamChat, uuid } from '../lib/api';
 import { formatDay, hhmm } from '../lib/time';
 import Ticket from './Ticket';
+import RestaurantCard from './RestaurantCard';
 
 type Block =
   | { kind: 'text'; id: string; text: string }
   | { kind: 'tool'; id: string; name: string; args: Record<string, unknown>; status: 'running' | 'done' | 'error'; result?: unknown }
-  | { kind: 'booking'; id: string; action: string; booking: Booking };
+  | { kind: 'booking'; id: string; action: string; booking: Booking }
+  | { kind: 'restaurants'; id: string; restaurants: RestaurantListItem[]; date?: string; party?: number };
 
 interface Turn {
   id: string;
@@ -27,7 +29,8 @@ interface Turn {
 
 const THREAD_KEY = 'tablewise:thread';
 const TURNS_KEY = 'tablewise:turns';
-const SUGGESTIONS = ['Do you have vegan options?', 'Book a table for 4 tomorrow at 8pm in the garden', "What's your corkage policy?", 'Cancel booking EV-XXXX'];
+const SUGGESTIONS = ['Rooftop dinner in Bandra for 4 tonight', 'Somewhere pure-veg near Andheri?', 'Book Kanji House for 2 tomorrow at 8pm', 'Cancel booking EMB-XXXX'];
+const RESTAURANT_SUGGESTIONS = ["What's good on the menu?", 'Do you have vegetarian options?', 'Book a table for 2 tonight at 8pm', "What's the cancellation policy?"];
 const NODES: { id: GraphNode; label: string }[] = [
   { id: 'router', label: 'router' },
   { id: 'retrieve', label: 'retrieve' },
@@ -93,6 +96,10 @@ function toolLabel(name: string, args: Record<string, unknown>): string {
       return `Cancelling ${code ?? 'booking'}…`;
     case 'lookup_booking':
       return `Looking up ${code ?? 'booking'}…`;
+    case 'search_restaurants': {
+      const q = [str(args.query) ?? str(args.q), str(args.cuisine), str(args.area) ? `in ${str(args.area)}` : null].filter(Boolean).join(' ');
+      return `Searching restaurants${q ? ` · ${q}` : ''}${party ? ` for ${party}` : ''}${date ? ` on ${formatDay(date)}` : ''}…`;
+    }
     default:
       return `Running ${name.replace(/_/g, ' ')}…`;
   }
@@ -110,8 +117,10 @@ function toolSummary(name: string, result: unknown): string {
   if (result == null) return 'Done';
   if (typeof result === 'string') return result.length > 140 ? `${result.slice(0, 140)}…` : result;
   if (typeof result !== 'object') return String(result);
+  if (Array.isArray(result)) return result.length ? `Found ${result.length} ${result.length === 1 ? 'match' : 'matches'}` : 'No matches';
   const r = result as Record<string, unknown>;
   if (typeof r.error === 'string') return r.error;
+  if (Array.isArray(r.restaurants)) return r.restaurants.length ? `Found ${r.restaurants.length} ${r.restaurants.length === 1 ? 'restaurant' : 'restaurants'}` : 'No restaurants matched';
   const b = asBooking(r);
   if (b) {
     if (name === 'create_booking') return `Booked ${b.code} · table ${b.table_name ?? '—'} at ${hhmm(b.start_time)}`;
@@ -157,6 +166,15 @@ function reduce(t: Turn, e: ChatEvent): Turn {
       return { ...t, sources: Array.isArray(e.sources) ? e.sources : [] };
     case 'booking':
       return { ...t, blocks: [...t.blocks, { kind: 'booking', id: uuid(), action: e.action, booking: e.booking }] };
+    case 'restaurants': {
+      if (!Array.isArray(e.restaurants) || !e.restaurants.length) return t;
+      // Carry the search's date / party into the slot links so they open on the right night.
+      const search = [...t.blocks].reverse().find((b) => b.kind === 'tool' && b.name === 'search_restaurants');
+      const args = search && search.kind === 'tool' ? search.args : {};
+      const date = str(args.date);
+      const party = num(args.party_size);
+      return { ...t, blocks: [...t.blocks, { kind: 'restaurants', id: uuid(), restaurants: e.restaurants, date: date && /^\d{4}-\d{2}-\d{2}$/.test(date) ? date : undefined, party: party ?? undefined }] };
+    }
     case 'error':
       return { ...t, error: e.message };
     case 'done':
@@ -256,7 +274,8 @@ function SourceChips({ sources }: { sources: Source[] }) {
             onClick={() => setOpen(open === s.index ? null : s.index)}
             className={`rounded-full border px-2.5 py-1 text-[11px] transition ${open === s.index ? 'border-ember/60 bg-ember/10 text-fg' : 'border-line bg-glass text-muted hover:text-fg'}`}
           >
-            <span className="font-mono text-ember">[{s.index}]</span> {s.source}
+            <span className="font-mono text-ember">[{s.index}]</span> {s.restaurant_slug ? <span className="text-gold">{s.restaurant_slug} · </span> : null}
+            {s.source}
             {s.section ? <span className="text-faint"> · {s.section}</span> : null}
           </motion.button>
         ))}
@@ -267,6 +286,7 @@ function SourceChips({ sources }: { sources: Source[] }) {
             <div className="mt-2 rounded-xl border border-line bg-glass p-3 text-xs leading-relaxed text-muted">
               <div className="mb-1 flex justify-between gap-2 text-[10px] uppercase tracking-wider text-faint">
                 <span>
+                  {cur.restaurant_slug ? `${cur.restaurant_slug} · ` : ''}
                   {cur.source}
                   {cur.section ? ` · ${cur.section}` : ''}
                 </span>
@@ -290,7 +310,7 @@ function Avatar() {
   );
 }
 
-const TurnView = memo(function TurnView({ turn, onRetry }: { turn: Turn; onRetry: (text: string) => void }) {
+const TurnView = memo(function TurnView({ turn, onRetry, onNavigate }: { turn: Turn; onRetry: (text: string) => void; onNavigate: () => void }) {
   const lastIdx = turn.blocks.length - 1;
   const lastIsText = turn.blocks[lastIdx]?.kind === 'text';
   return (
@@ -318,6 +338,12 @@ const TurnView = memo(function TurnView({ turn, onRetry }: { turn: Turn; onRetry
           </motion.div>
         ) : b.kind === 'tool' ? (
           <ToolCard key={b.id} name={b.name} args={b.args} status={b.status} result={b.result} />
+        ) : b.kind === 'restaurants' ? (
+          <div key={b.id} className="ml-9 grid gap-2">
+            {b.restaurants.slice(0, 6).map((r, k) => (
+              <RestaurantCard key={r.slug} r={r} date={b.date} party={b.party} mini index={k} onNavigate={onNavigate} />
+            ))}
+          </div>
         ) : (
           <div key={b.id} className="ml-9">
             <Ticket booking={b.booking} compact action={b.action} />
@@ -360,7 +386,10 @@ function useIsDesktop() {
   return m;
 }
 
-export default function Concierge({ open, onOpenChange }: { open: boolean; onOpenChange: (o: boolean) => void }) {
+export interface ConciergeContext { slug: string; name: string }
+
+export default function Concierge({ open, onOpenChange, restaurant = null }: { open: boolean; onOpenChange: (o: boolean) => void; restaurant?: ConciergeContext | null }) {
+  const restaurantSlug = restaurant?.slug ?? null;
   const isDesktop = useIsDesktop();
   const [threadId, setThreadId] = useState(loadThread);
   const [turns, setTurns] = useState<Turn[]>(() => loadTurns(loadThread()));
@@ -448,6 +477,7 @@ export default function Concierge({ open, onOpenChange }: { open: boolean; onOpe
             update((t) => reduce(t, evt));
           },
           ctrl.signal,
+          restaurantSlug,
         );
         update((t) => (t.status === 'streaming' ? { ...t, status: t.error ? 'error' : 'done', current: null } : t));
       } catch (e) {
@@ -457,11 +487,15 @@ export default function Concierge({ open, onOpenChange }: { open: boolean; onOpe
         abortRef.current = null;
       }
     },
-    [threadId],
+    [threadId, restaurantSlug],
   );
   const sendRef = useRef(send);
   sendRef.current = send;
   const retry = useCallback((text: string) => sendRef.current(text), []);
+
+  const closeOnMobile = useCallback(() => {
+    if (!window.matchMedia('(min-width: 768px)').matches) onOpenChange(false);
+  }, [onOpenChange]);
 
   const newConversation = () => {
     abortRef.current?.abort();
@@ -562,7 +596,13 @@ export default function Concierge({ open, onOpenChange }: { open: boolean; onOpe
                     {badge.text}
                   </span>
                 </div>
-                <p className="mt-1 truncate text-xs text-muted">Menu, wine &amp; reservations — ask anything.</p>
+                {restaurant ? (
+                  <p className="mt-1 flex min-w-0 items-center gap-1 truncate text-xs text-muted">
+                    <Store className="h-3 w-3 shrink-0 text-ember" /> Asking about <span className="truncate font-medium text-fg">{restaurant.name}</span>
+                  </p>
+                ) : (
+                  <p className="mt-1 truncate text-xs text-muted">Six Mumbai restaurants — menus, policies &amp; tables.</p>
+                )}
               </div>
               <button type="button" onClick={newConversation} title="New conversation" aria-label="New conversation" className="grid h-9 w-9 place-items-center rounded-full text-muted transition hover:bg-glass-hi hover:text-fg">
                 <SquarePen className="h-4 w-4" />
@@ -585,9 +625,13 @@ export default function Concierge({ open, onOpenChange }: { open: boolean; onOpe
                   <motion.p initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} className="font-wonk text-3xl">
                     Good evening.
                   </motion.p>
-                  <p className="mt-2 max-w-[19rem] text-sm text-muted">I'm the house concierge. Ask about the menu, our wines, house policies — or let me find you a table.</p>
+                  <p className="mt-2 max-w-[19rem] text-sm text-muted">
+                    {restaurant
+                      ? `Ask me anything about ${restaurant.name} — the menu, house policies — or let me find you a table.`
+                      : "I'm the Tablewise concierge. Tell me the mood, the area or the cuisine and I'll find you a table across Mumbai."}
+                  </p>
                   <div className="mt-6 flex flex-wrap justify-center gap-2">
-                    {SUGGESTIONS.map((s, i) => (
+                    {(restaurant ? RESTAURANT_SUGGESTIONS : SUGGESTIONS).map((s, i) => (
                       <motion.button
                         key={s}
                         type="button"
@@ -603,7 +647,7 @@ export default function Concierge({ open, onOpenChange }: { open: boolean; onOpe
                   </div>
                 </div>
               ) : (
-                turns.map((t) => <TurnView key={t.id} turn={t} onRetry={retry} />)
+                turns.map((t) => <TurnView key={t.id} turn={t} onRetry={retry} onNavigate={closeOnMobile} />)
               )}
             </div>
 
@@ -627,7 +671,7 @@ export default function Concierge({ open, onOpenChange }: { open: boolean; onOpe
                       send(input);
                     }
                   }}
-                  placeholder="Ask about the menu, wine, or a table…"
+                  placeholder={restaurant ? `Ask about ${restaurant.name}…` : 'Find a table, or ask about a restaurant…'}
                   className="field max-h-36 min-h-[50px] resize-none pr-14"
                 />
                 {streaming ? (

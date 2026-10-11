@@ -4,9 +4,6 @@ import type { Booking } from '../lib/types';
 import { formatDay, hhmm } from '../lib/time';
 import { zoneLabel } from '../lib/zones';
 
-// eslint-disable-next-line react-refresh/only-export-components -- AdminTimeline imports it from here until it switches to '../lib/zones'
-export { zoneLabel };
-
 function Barcode({ code }: { code: string }) {
   const bars = Array.from(code + code).map((c, i) => 1 + ((c.charCodeAt(0) * (i + 3)) % 4));
   let x = 0;
@@ -51,8 +48,8 @@ export default function Ticket({ booking, compact = false, action }: { booking: 
         <div className="sheen sheen-once" />
         <div ref={topRef} className={compact ? 'px-5 pb-4 pt-4' : 'px-5 pb-6 pt-5 sm:px-7 sm:pb-7 sm:pt-6'}>
           <div className="flex items-center justify-between gap-3 text-[10px] font-semibold uppercase tracking-[0.2em] opacity-70 sm:tracking-[0.28em]">
-            <span>Ember &amp; Vine</span>
-            <span className={`flex items-center gap-1.5 ${cancelled ? 'text-danger' : 'text-ember'}`}>
+            <span className="min-w-0 truncate">{booking.restaurant_name ?? 'Tablewise'}</span>
+            <span className={`flex shrink-0 items-center gap-1.5 ${cancelled ? 'text-danger' : 'text-ember'}`}>
               <span className="h-1.5 w-1.5 rounded-full bg-current" /> {status}
             </span>
           </div>

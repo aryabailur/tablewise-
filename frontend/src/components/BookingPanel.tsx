@@ -2,9 +2,10 @@ import { useCallback, useEffect, useEffectEvent, useMemo, useRef, useState, type
 import { AnimatePresence, motion } from 'framer-motion';
 import confetti from 'canvas-confetti';
 import { CircleAlert, LoaderCircle, Minus, Plus, RotateCcw } from 'lucide-react';
-import type { Availability, Booking, Slot } from '../lib/types';
+import { Link } from 'react-router-dom';
+import type { Availability, Booking, BookingSource, Slot } from '../lib/types';
 import { ApiError, BOOKING_CHANGED, createBooking, errorMessage, getAvailability, notifyBookingsChanged } from '../lib/api';
-import { MONTHS, WEEKDAYS, formatDay, nextDays, toISODate } from '../lib/time';
+import { MONTHS, WEEKDAYS, formatDay, nextDays, parseISODate, toISODate } from '../lib/time';
 import { zoneLabel } from '../lib/zones';
 import Ticket from './Ticket';
 
@@ -260,15 +261,36 @@ function TimeSlots({ slots, pending, loading, error, value, onChange, onRetry, a
   );
 }
 
-export default function BookingPanel() {
-  const days = useMemo(() => nextDays(14), []);
-  const [date, setDate] = useState(() => toISODate(days[0]));
-  const [party, setParty] = useState(2);
+export interface BookingPanelProps {
+  slug: string;
+  restaurantName: string;
+  initialDate?: string | null;
+  initialParty?: number | null;
+  initialTime?: string | null;
+  /** Booking-focused layout (the /book entry point): smaller heading. */
+  compact?: boolean;
+  source?: BookingSource;
+}
+
+const clampParty = (n: number | null | undefined) => (n && Number.isFinite(n) ? Math.min(12, Math.max(1, Math.round(n))) : 2);
+
+export default function BookingPanel({ slug, restaurantName, initialDate, initialParty, initialTime, compact = false, source = 'web' }: BookingPanelProps) {
+  const days = useMemo(() => {
+    // Two weeks ahead, stretched if a deep link asks for a later night.
+    const today = toISODate(new Date());
+    const ahead = initialDate && /^\d{4}-\d{2}-\d{2}$/.test(initialDate) && initialDate > today ? Math.round((parseISODate(initialDate).getTime() - parseISODate(today).getTime()) / 86400000) + 1 : 0;
+    return nextDays(Math.min(60, Math.max(14, ahead)));
+  }, [initialDate]);
+  const [date, setDate] = useState(() => {
+    const first = toISODate(days[0]);
+    return initialDate && days.some((d) => toISODate(d) === initialDate) ? initialDate : first;
+  });
+  const [party, setParty] = useState(() => clampParty(initialParty));
   const [avail, setAvail] = useState<Availability | null>(null);
   const [availFor, setAvailFor] = useState('');
   const [loading, setLoading] = useState(true);
   const [availError, setAvailError] = useState<string | null>(null);
-  const [time, setTime] = useState<string | null>(null);
+  const [time, setTime] = useState<string | null>(initialTime && /^\d{2}:\d{2}$/.test(initialTime) ? initialTime : null);
   const [tableId, setTableId] = useState<number | null>(null);
   const [form, setForm] = useState({ name: '', phone: '', email: '', notes: '' });
   const [touched, setTouched] = useState(false);
@@ -283,7 +305,7 @@ export default function BookingPanel() {
       setLoading(true);
       if (!silent) setAvail(null);
       try {
-        const a = await getAvailability(date, party);
+        const a = await getAvailability(slug, date, party);
         if (id !== reqId.current) return;
         setAvail(a && Array.isArray(a.slots) ? a : { date, party_size: party, slots: [] });
         setAvailFor(`${date}|${party}`);
@@ -295,7 +317,7 @@ export default function BookingPanel() {
         if (id === reqId.current) setLoading(false);
       }
     },
-    [date, party],
+    [slug, date, party],
   );
 
   useEffect(() => {
@@ -349,7 +371,7 @@ export default function BookingPanel() {
     setSubmitting(true);
     setSubmitError(null);
     try {
-      const b = await createBooking({
+      const b = await createBooking(slug, {
         guest_name: form.name.trim(),
         party_size: party,
         start_time: slot.start || `${date}T${slot.time}:00`,
@@ -357,8 +379,9 @@ export default function BookingPanel() {
         email: form.email.trim() || undefined,
         notes: form.notes.trim() || undefined,
         table_id: table?.id,
+        source,
       });
-      setBooking(b);
+      setBooking({ ...b, restaurant_name: b.restaurant_name ?? restaurantName, restaurant_slug: b.restaurant_slug ?? slug });
       celebrate();
       notifyBookingsChanged(b);
     } catch (err) {
@@ -378,13 +401,13 @@ export default function BookingPanel() {
   };
 
   return (
-    <section id="reserve" className="relative mx-auto max-w-6xl scroll-mt-24 px-4 py-16 sm:px-6 sm:py-24">
-      <motion.div initial={{ opacity: 0, y: 30 }} whileInView={{ opacity: 1, y: 0 }} viewport={{ once: true, margin: '-80px' }} transition={{ duration: 0.8 }} className="mb-10 text-center">
-        <p className="text-xs font-semibold uppercase tracking-[0.35em] text-ember">Reservations</p>
-        <h2 className="mt-3 text-balance font-wonk text-[2.5rem] leading-[1.08] sm:text-6xl">
+    <section id="reserve" className={`relative mx-auto max-w-6xl scroll-mt-24 px-4 sm:px-6 ${compact ? 'py-8 sm:py-10' : 'py-16 sm:py-24'}`}>
+      <motion.div initial={{ opacity: 0, y: 30 }} whileInView={{ opacity: 1, y: 0 }} viewport={{ once: true, margin: '-80px' }} transition={{ duration: 0.8 }} className={compact ? 'mb-6 text-center' : 'mb-10 text-center'}>
+        <p className="text-xs font-semibold uppercase tracking-[0.35em] text-ember">Reservations · {restaurantName}</p>
+        <h2 className={`mt-3 text-balance font-wonk leading-[1.08] ${compact ? 'text-3xl sm:text-4xl' : 'text-[2.5rem] sm:text-6xl'}`}>
           Reserve your <em className="text-ember-gradient pr-1">evening</em>
         </h2>
-        <p className="mx-auto mt-4 max-w-xl text-pretty text-[15px] text-muted sm:text-base">Choose a night, tell us how many, and pick the seating that suits the mood.</p>
+        {!compact && <p className="mx-auto mt-4 max-w-xl text-pretty text-[15px] text-muted sm:text-base">Choose a night, tell us how many, and pick the seating that suits the mood.</p>}
       </motion.div>
 
       <motion.div initial={{ opacity: 0, y: 40 }} whileInView={{ opacity: 1, y: 0 }} viewport={{ once: true, margin: '-60px' }} transition={{ duration: 0.9 }} className="glass rounded-3xl p-4 sm:rounded-[28px] sm:p-8 lg:p-10">
@@ -439,9 +462,14 @@ export default function BookingPanel() {
             {booking ? (
               <motion.div key="ticket" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="flex w-full flex-col items-center gap-6">
                 <Ticket booking={booking} />
-                <button type="button" onClick={reset} className="glass-soft min-h-11 touch-manipulation rounded-full px-5 py-2.5 text-sm text-fg hover:text-ember">
-                  Book another table
-                </button>
+                <div className="flex flex-wrap justify-center gap-2">
+                  <Link to={`/bookings/${encodeURIComponent(booking.code)}`} className="glass-soft inline-flex min-h-11 touch-manipulation items-center rounded-full px-5 py-2.5 text-sm text-fg hover:text-ember">
+                    Manage booking
+                  </Link>
+                  <button type="button" onClick={reset} className="glass-soft min-h-11 touch-manipulation rounded-full px-5 py-2.5 text-sm text-fg hover:text-ember">
+                    Book another table
+                  </button>
+                </div>
               </motion.div>
             ) : (
               <motion.form key="form" onSubmit={submit} initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0, y: -10 }} noValidate>
@@ -450,16 +478,16 @@ export default function BookingPanel() {
                     <div className="grid min-w-0 grid-cols-1 gap-4 sm:grid-cols-2">
                       <label className="block sm:col-span-2">
                         <span className="mb-1.5 block text-[13px] text-muted sm:text-xs">Name *</span>
-                        <input className="field text-base" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} placeholder="Ana Ruiz" autoComplete="name" aria-invalid={touched && nameMissing} />
+                        <input className="field text-base" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} placeholder="Ananya Rao" autoComplete="name" aria-invalid={touched && nameMissing} />
                         {touched && nameMissing && <span className="mt-1 block text-[13px] text-danger sm:text-xs">Please tell us who the table is for.</span>}
                       </label>
                       <label className="block">
                         <span className="mb-1.5 block text-[13px] text-muted sm:text-xs">Phone</span>
-                        <input className="field text-base" type="tel" value={form.phone} onChange={(e) => setForm({ ...form, phone: e.target.value })} placeholder="+1 555 0100" autoComplete="tel" inputMode="tel" />
+                        <input className="field text-base" type="tel" value={form.phone} onChange={(e) => setForm({ ...form, phone: e.target.value })} placeholder="+91 98200 12345" autoComplete="tel" inputMode="tel" />
                       </label>
                       <label className="block">
                         <span className="mb-1.5 block text-[13px] text-muted sm:text-xs">Email</span>
-                        <input className="field text-base" type="email" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} placeholder="ana@example.com" autoComplete="email" inputMode="email" autoCapitalize="off" spellCheck={false} />
+                        <input className="field text-base" type="email" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} placeholder="ananya@example.com" autoComplete="email" inputMode="email" autoCapitalize="off" spellCheck={false} />
                       </label>
                       <label className="block sm:col-span-2">
                         <span className="mb-1.5 block text-[13px] text-muted sm:text-xs">Notes</span>
