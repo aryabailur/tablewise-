@@ -23,7 +23,7 @@ On first start the backend waits for Postgres. If the `restaurant` table is miss
 
 | Service | URL | Login |
 |---|---|---|
-| App (nginx + React) | http://localhost:3000 | none |
+| App (nginx + React) | http://localhost:3000 (or `FRONTEND_PORT=3002 docker compose up -d` if 3000 is taken) | none |
 | API docs (FastAPI) | http://localhost:8000/docs | none |
 | Grafana | http://localhost:3001 (dashboard: http://localhost:3001/d/tablewise-overview) | admin / admin (anonymous viewers allowed) |
 | Prometheus | http://localhost:9090 | none |
