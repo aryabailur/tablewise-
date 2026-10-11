@@ -1,9 +1,15 @@
-"""RAG over the restaurant knowledge base: markdown -> heading chunks -> fastembed -> ChromaDB."""
+"""RAG over the per-restaurant knowledge base: markdown -> heading chunks -> fastembed -> ChromaDB.
+
+Layout: knowledge/<restaurant_slug>/{about,menu,policies}.md plus knowledge/_platform/faq.md.
+Each chunk carries restaurant_slug metadata ("_platform" for Tablewise-wide docs) and is mirrored into the
+rag_documents SQL table.
+"""
 from __future__ import annotations
 
 import os
 import re
 import threading
+import time
 from pathlib import Path
 from typing import Any
 
@@ -13,7 +19,9 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 KNOWLEDGE_DIR = BASE_DIR / "knowledge"
 CHROMA_DIR = Path(os.getenv("CHROMA_DIR") or BASE_DIR / "data" / "chroma")
 MODEL_CACHE = Path(os.getenv("FASTEMBED_CACHE_DIR") or BASE_DIR / "data" / "fastembed_cache")
-COLLECTION = "ember_vine_knowledge"
+COLLECTION = "tablewise_knowledge"
+PLATFORM_SLUG = "_platform"
+DOC_NAMES = ("about", "menu", "policies")
 EMBED_MODEL = "BAAI/bge-small-en-v1.5"
 
 CHUNK_TOKENS = 400
@@ -91,24 +99,48 @@ def chunk_markdown(text: str, source: str) -> list[dict[str, Any]]:
 
 # ---------------------------------------------------------------- ingest / retrieve
 
-def ingest(knowledge_dir: Path = KNOWLEDGE_DIR) -> int:
-    """Idempotent: drops and rebuilds the collection from every *.md file."""
+def load_chunks(knowledge_dir: Path = KNOWLEDGE_DIR) -> list[dict[str, Any]]:
     chunks: list[dict[str, Any]] = []
-    for path in sorted(knowledge_dir.glob("*.md")):
-        chunks.extend(chunk_markdown(path.read_text(encoding="utf-8"), path.name))
+    for folder in sorted(p for p in knowledge_dir.iterdir() if p.is_dir()):
+        for path in sorted(folder.glob("*.md")):
+            file_chunks = chunk_markdown(path.read_text(encoding="utf-8"), path.name)
+            for i, c in enumerate(file_chunks):
+                c.update(restaurant_slug=folder.name, chunk_index=i, id=f"{folder.name}/{path.name}::{i}")
+            chunks.extend(file_chunks)
+    return chunks
+
+
+def _store_sql(chunks: list[dict[str, Any]]) -> None:
+    from sqlmodel import delete
+
+    from .db import RagDocument, get_session, init_db
+    init_db()
+    with get_session() as s:
+        s.exec(delete(RagDocument))
+        for c in chunks:
+            s.add(RagDocument(id=c["id"], restaurant_slug=c["restaurant_slug"], source=c["source"],
+                              section=c["section"], chunk_index=c["chunk_index"], text=c["text"]))
+        s.commit()
+
+
+def ingest(knowledge_dir: Path = KNOWLEDGE_DIR) -> int:
+    """Idempotent: drops and rebuilds the collection (and rag_documents table) from every <slug>/*.md file."""
+    chunks = load_chunks(knowledge_dir)
     client = _get_client()
     try:
         client.delete_collection(COLLECTION)
     except Exception:
         pass
     col = _collection()
+    _store_sql(chunks)
     if not chunks:
         return 0
     embeddings = [e.tolist() for e in _get_embedder().embed([c["text"] for c in chunks])]
     col.add(
-        ids=[f"{c['source']}::{i}" for i, c in enumerate(chunks)],
+        ids=[c["id"] for c in chunks],
         documents=[c["text"] for c in chunks],
-        metadatas=[{"source": c["source"], "section": c["section"]} for c in chunks],
+        metadatas=[{"source": c["source"], "section": c["section"], "restaurant_slug": c["restaurant_slug"],
+                    "chunk_index": c["chunk_index"]} for c in chunks],
         embeddings=embeddings,
     )
     return len(chunks)
@@ -121,13 +153,33 @@ def count() -> int:
         return 0
 
 
-def retrieve(query: str, k: int = 4) -> list[dict[str, Any]]:
-    if count() == 0:
-        ingest()
-    q = next(iter(_get_embedder().query_embed(query))).tolist()
-    res = _collection().query(query_embeddings=[q], n_results=k, include=["documents", "metadatas", "distances"])
+def read_docs(restaurant_slug: str, knowledge_dir: Path = KNOWLEDGE_DIR) -> dict[str, str]:
+    """Raw markdown for a restaurant page: {"about": md, "menu": md, "policies": md} ("" when missing)."""
+    folder = knowledge_dir / restaurant_slug
+    out = {}
+    for name in DOC_NAMES:
+        path = folder / f"{name}.md"
+        out[name] = path.read_text(encoding="utf-8") if path.is_file() else ""
+    return out
+
+
+def retrieve(query: str, k: int = 4, restaurant_slug: str | None = None) -> list[dict[str, Any]]:
+    """Top-k chunks. With restaurant_slug, only that restaurant's docs plus the platform FAQ are searched."""
+    from . import metrics
+    started = time.perf_counter()
+    try:
+        if count() == 0:
+            ingest()
+        q = next(iter(_get_embedder().query_embed(query))).tolist()
+        kwargs: dict[str, Any] = {}
+        if restaurant_slug:
+            kwargs["where"] = {"restaurant_slug": {"$in": [restaurant_slug, PLATFORM_SLUG]}}
+        res = _collection().query(query_embeddings=[q], n_results=k, include=["documents", "metadatas", "distances"],
+                                  **kwargs)
+    finally:
+        metrics.RAG_RETRIEVAL.observe(time.perf_counter() - started)
     out = []
     for i, (doc, meta, dist) in enumerate(zip(res["documents"][0], res["metadatas"][0], res["distances"][0]), start=1):
-        out.append({"index": i, "source": meta.get("source"), "section": meta.get("section"), "text": doc,
-                    "score": round(1 - float(dist), 3)})
+        out.append({"index": i, "source": meta.get("source"), "section": meta.get("section"),
+                    "restaurant_slug": meta.get("restaurant_slug"), "text": doc, "score": round(1 - float(dist), 3)})
     return out
