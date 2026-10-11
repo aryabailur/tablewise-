@@ -312,7 +312,7 @@ export default function BookingPanel() {
       });
       setBooking(b);
       celebrate();
-      notifyBookingsChanged();
+      notifyBookingsChanged(b);
     } catch (err) {
       setSubmitError(errorMessage(err));
       if (err instanceof ApiError && err.status === 409) load(true);
