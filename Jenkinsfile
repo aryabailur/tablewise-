@@ -1,4 +1,4 @@
-// Tablewise CI: backend lint + tests, RAG ingest smoke test, frontend build, packaged artifact,
+// Tablewise CI: backend lint + tests, RAG ingest smoke test, frontend lint + build, packaged artifact,
 // and a build-status comment on any TAB-### Jira issue named in the branch, PR or latest commit message.
 
 def notifyJira(String outcome) {
@@ -95,14 +95,29 @@ pipeline {
       }
     }
 
-    stage('Frontend: Build') {
+    stage('Frontend: Install') {
       steps {
         dir('frontend') {
           sh '''
             export npm_config_cache="$HOME/.cache/npm"
             npm ci --no-audit --no-fund
-            npm run build
           '''
+        }
+      }
+    }
+
+    stage('Frontend: Lint') {
+      steps {
+        dir('frontend') {
+          sh 'npm run lint'
+        }
+      }
+    }
+
+    stage('Frontend: Build') {
+      steps {
+        dir('frontend') {
+          sh 'npm run build'
         }
       }
     }
