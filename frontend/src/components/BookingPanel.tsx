@@ -1,11 +1,12 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type FormEvent, type ReactNode } from 'react';
+import { useCallback, useEffect, useEffectEvent, useMemo, useRef, useState, type CSSProperties, type FormEvent, type ReactNode } from 'react';
 import { AnimatePresence, motion } from 'framer-motion';
 import confetti from 'canvas-confetti';
 import { CircleAlert, LoaderCircle, Minus, Plus, RotateCcw } from 'lucide-react';
 import type { Availability, Booking, Slot } from '../lib/types';
 import { ApiError, BOOKING_CHANGED, createBooking, errorMessage, getAvailability, notifyBookingsChanged } from '../lib/api';
 import { MONTHS, WEEKDAYS, formatDay, nextDays, toISODate } from '../lib/time';
-import Ticket, { zoneLabel } from './Ticket';
+import { zoneLabel } from '../lib/zones';
+import Ticket from './Ticket';
 
 function celebrate() {
   const opts = { colors: ['#ff7a3d', '#e3bc76', '#fbe9d0', '#b8441d', '#7d1f45'], disableForReducedMotion: true, zIndex: 80 };
@@ -83,11 +84,12 @@ function DateStrip({ days, value, onChange }: { days: Date[]; value: string; onC
 }
 
 function PartyDial({ value, onChange }: { value: number; onChange: (n: number) => void }) {
-  const prev = useRef(value);
-  const dir = value >= prev.current ? 1 : -1;
-  useEffect(() => {
-    prev.current = value;
-  }, [value]);
+  const [prev, setPrev] = useState(value);
+  const [dir, setDir] = useState(1);
+  if (value !== prev) {
+    setPrev(value);
+    setDir(value > prev ? 1 : -1);
+  }
   const R = 64;
   const btn =
     'grid size-12 shrink-0 touch-manipulation place-items-center rounded-full border border-line bg-glass text-fg transition hover:border-ember/60 hover:text-ember disabled:opacity-30 sm:size-11';
@@ -301,10 +303,9 @@ export default function BookingPanel() {
     return () => window.clearTimeout(t);
   }, [load]);
 
-  const loadRef = useRef(load);
-  loadRef.current = load;
+  const refresh = useEffectEvent(() => load(true));
   useEffect(() => {
-    const h = () => loadRef.current(true);
+    const h = () => refresh();
     window.addEventListener(BOOKING_CHANGED, h);
     return () => window.removeEventListener(BOOKING_CHANGED, h);
   }, []);
@@ -314,19 +315,18 @@ export default function BookingPanel() {
   // (including the short debounce before the request) and retries after an error.
   // Silent refreshes keep the current slots on screen.
   const pending = avail ? availFor !== `${date}|${party}` : loading;
-  const slot = slots.find((s) => s.time === time) ?? null;
-
-  useEffect(() => {
-    if (!avail) return;
-    const s = avail.slots.find((x) => x.time === time);
-    if (!s || !s.available) {
+  const [checked, setChecked] = useState(avail);
+  if (avail !== checked) {
+    setChecked(avail);
+    const s = avail?.slots.find((x) => x.time === time);
+    if (avail && (!s || !s.available)) {
       setTime(null);
       setTableId(null);
-    } else if (!s.available_tables.some((t) => t.id === tableId)) {
+    } else if (s && !s.available_tables.some((t) => t.id === tableId)) {
       setTableId(s.best_table?.id ?? s.available_tables[0]?.id ?? null);
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [avail]);
+  }
+  const slot = slots.find((s) => s.time === time) ?? null;
 
   const pickTime = (t: string) => {
     setTime(t);

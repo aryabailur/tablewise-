@@ -2,9 +2,10 @@ import { useLayoutEffect, useRef, useState } from 'react';
 import { motion } from 'framer-motion';
 import type { Booking } from '../lib/types';
 import { formatDay, hhmm } from '../lib/time';
+import { zoneLabel } from '../lib/zones';
 
-const ZONE_LABEL: Record<string, string> = { window: 'Window', garden: 'Garden', bar: 'Bar', private: 'Private' };
-export const zoneLabel = (z: string | null | undefined) => (z ? ZONE_LABEL[z] ?? z : '—');
+// eslint-disable-next-line react-refresh/only-export-components -- AdminTimeline imports it from here until it switches to '../lib/zones'
+export { zoneLabel };
 
 function Barcode({ code }: { code: string }) {
   const bars = Array.from(code + code).map((c, i) => 1 + ((c.charCodeAt(0) * (i + 3)) % 4));
