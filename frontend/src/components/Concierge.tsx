@@ -73,7 +73,7 @@ function loadTurns(thread: string): Turn[] {
 const str = (v: unknown) => (typeof v === 'string' && v ? v : null);
 const num = (v: unknown) => (typeof v === 'number' ? v : typeof v === 'string' && v && !isNaN(+v) ? +v : null);
 
-export function toolLabel(name: string, args: Record<string, unknown>): string {
+function toolLabel(name: string, args: Record<string, unknown>): string {
   const party = num(args.party_size);
   const date = str(args.date);
   const time = str(args.time);
@@ -106,7 +106,7 @@ function asBooking(v: unknown): Booking | null {
   return null;
 }
 
-export function toolSummary(name: string, result: unknown): string {
+function toolSummary(name: string, result: unknown): string {
   if (result == null) return 'Done';
   if (typeof result === 'string') return result.length > 140 ? `${result.slice(0, 140)}…` : result;
   if (typeof result !== 'object') return String(result);
