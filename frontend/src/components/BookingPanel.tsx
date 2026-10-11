@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type FormEvent, type ReactNode } from 'react';
 import { AnimatePresence, motion } from 'framer-motion';
 import confetti from 'canvas-confetti';
 import { CircleAlert, LoaderCircle, Minus, Plus, RotateCcw } from 'lucide-react';
@@ -158,9 +158,51 @@ function PartyDial({ value, onChange }: { value: number; onChange: (n: number) =
   );
 }
 
-function TimeSlots({ slots, loading, error, value, onChange, onRetry, animKey }: {
-  slots: Slot[]; loading: boolean; error: string | null; value: string | null; onChange: (t: string) => void; onRetry: () => void; animKey: string;
+/** Staggers the shimmer sweep so a row of placeholders reads as one travelling wave. */
+const wave = (i: number) => ({ '--shimmer-delay': `${i * 70}ms` }) as CSSProperties;
+
+/** Placeholder pills with the same box as a real time pill (padding, type size, tabular digits). */
+function SlotSkeletons() {
+  return (
+    <div role="status" aria-busy="true">
+      <span className="sr-only">Checking which seatings are free…</span>
+      <div aria-hidden className="flex flex-wrap gap-2">
+        {Array.from({ length: 11 }, (_, i) => (
+          <span key={i} className="shimmer inline-flex rounded-full px-4 py-2 text-sm font-medium tabular-nums" style={wave(i)}>
+            <span className="invisible">00:00</span>
+          </span>
+        ))}
+      </div>
+      <div aria-hidden className="mt-3 flex h-4 items-center">
+        <span className="shimmer-bar block h-2 w-36 rounded-full" />
+      </div>
+    </div>
+  );
+}
+
+/** Placeholder table chips: a name block and a zone/seats line, sized like the real chips. */
+function TableSkeletons() {
+  return (
+    <div aria-busy="true">
+      <span className="sr-only">Loading tables…</span>
+      <div aria-hidden className="flex flex-wrap gap-2">
+        {['w-24', 'w-28', 'w-20'].map((w, i) => (
+          <span key={w} className="shimmer flex items-center gap-2.5 rounded-2xl px-4 py-2.5" style={wave(i + 2)}>
+            <span className="flex h-7 items-center">
+              <span className="shimmer-bar block h-4 w-9 rounded-full" />
+            </span>
+            <span className={`shimmer-bar block h-2.5 rounded-full ${w}`} />
+          </span>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function TimeSlots({ slots, pending, loading, error, value, onChange, onRetry, animKey }: {
+  slots: Slot[]; pending: boolean; loading: boolean; error: string | null; value: string | null; onChange: (t: string) => void; onRetry: () => void; animKey: string;
 }) {
+  if (pending) return <SlotSkeletons />;
   if (error)
     return (
       <div className="flex items-start gap-3 rounded-2xl border border-danger/30 bg-danger/10 p-4 text-sm text-fg">
@@ -169,14 +211,6 @@ function TimeSlots({ slots, loading, error, value, onChange, onRetry, animKey }:
         <button type="button" onClick={onRetry} className="inline-flex items-center gap-1 text-xs text-ember hover:underline">
           <RotateCcw className="h-3 w-3" /> Retry
         </button>
-      </div>
-    );
-  if (loading && !slots.length)
-    return (
-      <div className="flex flex-wrap gap-2">
-        {Array.from({ length: 11 }, (_, i) => (
-          <span key={i} className="skeleton h-9 w-[68px] rounded-full" />
-        ))}
       </div>
     );
   if (!slots.length) return <p className="text-sm text-muted">No seatings on this date.</p>;
@@ -221,6 +255,7 @@ export default function BookingPanel() {
   const [date, setDate] = useState(() => toISODate(days[0]));
   const [party, setParty] = useState(2);
   const [avail, setAvail] = useState<Availability | null>(null);
+  const [availFor, setAvailFor] = useState('');
   const [loading, setLoading] = useState(true);
   const [availError, setAvailError] = useState<string | null>(null);
   const [time, setTime] = useState<string | null>(null);
@@ -241,6 +276,7 @@ export default function BookingPanel() {
         const a = await getAvailability(date, party);
         if (id !== reqId.current) return;
         setAvail(a && Array.isArray(a.slots) ? a : { date, party_size: party, slots: [] });
+        setAvailFor(`${date}|${party}`);
         setAvailError(null);
       } catch (e) {
         if (id !== reqId.current) return;
@@ -266,6 +302,10 @@ export default function BookingPanel() {
   }, []);
 
   const slots = avail?.slots ?? [];
+  // Skeletons while there is nothing current to show: first load, a date/party change
+  // (including the short debounce before the request) and retries after an error.
+  // Silent refreshes keep the current slots on screen.
+  const pending = avail ? availFor !== `${date}|${party}` : loading;
   const slot = slots.find((s) => s.time === time) ?? null;
 
   useEffect(() => {
@@ -352,10 +392,12 @@ export default function BookingPanel() {
           </Step>
           <div className="space-y-10">
             <Step n="03" title="Time">
-              <TimeSlots slots={slots} loading={loading} error={availError} value={time} onChange={pickTime} onRetry={() => load(false)} animKey={`${date}-${party}`} />
+              <TimeSlots slots={slots} pending={pending} loading={loading} error={availError} value={time} onChange={pickTime} onRetry={() => load(false)} animKey={`${date}-${party}`} />
             </Step>
-            <Step n="04" title="Your table" aside={slot ? `${slot.available_tables.length} free at ${slot.time}` : undefined}>
-              {!slot ? (
+            <Step n="04" title="Your table" aside={slot && !pending ? `${slot.available_tables.length} free at ${slot.time}` : undefined}>
+              {pending ? (
+                <TableSkeletons />
+              ) : !slot ? (
                 <p className="text-sm text-muted">Pick a time to see which tables are free.</p>
               ) : (
                 <div className="flex flex-wrap gap-2">
