@@ -1,0 +1,106 @@
+# Tablewise v2 local stack:  docker compose up -d --build
+# Host ports: 3000 app, 8000 API, 8081 Adminer, 9090 Prometheus, 3001 Grafana.
+# 8080 is left free for the existing Jenkins container (tablewise-jenkins).
+name: tablewise
+
+services:
+  postgres:
+    image: postgres:16.4
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: tablewise
+      POSTGRES_USER: tablewise
+      POSTGRES_PASSWORD: tablewise
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U tablewise -d tablewise"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  backend:
+    build: ./backend
+    image: tablewise-backend:v2
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    env_file:
+      - path: ./backend/.env
+        required: false
+    environment:
+      DATABASE_URL: postgresql+psycopg://tablewise:tablewise@postgres:5432/tablewise
+      # Host shell values win when set; otherwise backend/.env (env_file) applies. They are passed
+      # under HOST_* names so an unset host var can't blank the env_file value; the entrypoint maps them.
+      HOST_LLM_PROVIDER: ${LLM_PROVIDER:-}
+      HOST_GROQ_API_KEY: ${GROQ_API_KEY:-}
+      HOST_LLM_MODEL: ${LLM_MODEL:-}
+      HOST_ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      CHROMA_DIR: /app/data/chroma
+      FASTEMBED_CACHE_DIR: /app/data/fastembed_cache
+    ports:
+      - "8000:8000"
+    volumes:
+      - chroma:/app/data/chroma
+      - fastembed_cache:/app/data/fastembed_cache
+
+  frontend:
+    build: ./frontend
+    image: tablewise-frontend:v2
+    restart: unless-stopped
+    depends_on:
+      - backend
+    ports:
+      - "${FRONTEND_PORT:-3000}:3000"
+
+  adminer:
+    image: adminer:4.8.1
+    restart: unless-stopped
+    depends_on:
+      - postgres
+    environment:
+      ADMINER_DEFAULT_SERVER: postgres
+    ports:
+      - "8081:8080"
+
+  prometheus:
+    image: prom/prometheus:v2.54.1
+    restart: unless-stopped
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      - --storage.tsdb.retention.time=7d
+    volumes:
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    ports:
+      - "9090:9090"
+    depends_on:
+      - backend
+
+  grafana:
+    image: grafana/grafana:11.2.0
+    restart: unless-stopped
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: admin
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Viewer
+      GF_USERS_DEFAULT_THEME: dark
+      GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH: /etc/grafana/provisioning/dashboards/tablewise-overview.json
+    volumes:
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      - grafana_data:/var/lib/grafana
+    ports:
+      - "3001:3000"
+    depends_on:
+      - prometheus
+      - postgres
+
+volumes:
+  pgdata:
+  chroma:
+  fastembed_cache:
+  prometheus_data:
+  grafana_data:

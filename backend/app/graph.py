@@ -1,6 +1,9 @@
-"""LangGraph concierge: router -> retrieve -> booking_agent <-> tools -> respond.
+"""LangGraph concierge: router -> retrieve -> booking_agent <-> tools -> respond (+ guardrail for off-topic).
 
-Streams UI events (node transitions, tokens, tool calls, sources, bookings) via `run_chat`.
+Multi-restaurant: the graph state carries `current_restaurant` (persisted per thread by the checkpointer). It is set
+from ChatRequest.restaurant_slug, when the guest names a restaurant, or when a tool is called for one. The
+"discover" intent lets the agent search restaurants and emits a `restaurants` UI event with the matches.
+Streams UI events (node transitions, tokens, tool calls, sources, bookings, restaurants) via `run_chat`.
 """
 from __future__ import annotations
 
@@ -8,6 +11,7 @@ import asyncio
 import json
 import os
 import re
+import time as _time
 import uuid
 from collections.abc import AsyncIterator
 from datetime import datetime, timedelta
@@ -21,11 +25,12 @@ from langgraph.checkpoint.memory import MemorySaver
 from langgraph.config import get_stream_writer
 from langgraph.graph import END, START, StateGraph
 from langgraph.graph.message import add_messages
-from langgraph.prebuilt import ToolNode
+from langgraph.prebuilt import InjectedState, ToolNode
 from pydantic import BaseModel, Field
 
 from . import booking_service as bs
-from . import rag
+from . import metrics, rag
+from .seed import RESTAURANTS as _SEED_RESTAURANTS
 
 _BACKEND = Path(__file__).resolve().parent.parent
 load_dotenv(_BACKEND / ".env")
@@ -35,6 +40,7 @@ PROVIDER = (os.getenv("LLM_PROVIDER") or ("groq" if os.getenv("GROQ_API_KEY") el
 _DEFAULT_MODELS = {"groq": "openai/gpt-oss-120b", "anthropic": "claude-sonnet-4-5"}
 MODEL = os.getenv("LLM_MODEL") or _DEFAULT_MODELS.get(PROVIDER, "openai/gpt-oss-120b")
 LLM_ENABLED = bool(os.getenv("GROQ_API_KEY") if PROVIDER == "groq" else os.getenv("ANTHROPIC_API_KEY"))
+INTENTS = ("info", "booking", "discover", "smalltalk", "offtopic")
 
 
 def _llm(max_tokens: int = 1500):
@@ -45,23 +51,126 @@ def _llm(max_tokens: int = 1500):
     return ChatAnthropic(model=MODEL, max_tokens=max_tokens, max_retries=2)
 
 
+# ====================================================================== restaurant resolution
+
+def _aliases() -> dict[str, str]:
+    """alias (lowercase) -> slug. Static (from the seed list) so routing never needs the database."""
+    out: dict[str, str] = {}
+    for r in _SEED_RESTAURANTS:
+        slug, name = r["slug"], r["name"].lower()
+        for a in {slug, slug.replace("-", " "), name, name.replace("&", "and"), name.replace(" & ", " "),
+                  slug.split("-")[0]}:
+            out[a] = slug
+    out["alba"] = "trattoria-alba"
+    return out
+
+
+_ALIASES = _aliases()
+_ALIAS_RE = re.compile(r"\b(" + "|".join(sorted(map(re.escape, _ALIASES), key=len, reverse=True)) + r")\b")
+_SLUGS = tuple(r["slug"] for r in _SEED_RESTAURANTS)
+
+
+def resolve_restaurant(value: str | None) -> str | None:
+    """Map a slug or restaurant name ("Trattoria Alba", "alba") to its slug."""
+    if not value:
+        return None
+    v = value.strip().lower()
+    if v in _ALIASES:
+        return _ALIASES[v]
+    m = _ALIAS_RE.search(v)
+    return _ALIASES[m.group(1)] if m else None
+
+
+def mentioned_restaurants(text: str) -> list[str]:
+    seen: list[str] = []
+    for m in _ALIAS_RE.finditer(text.lower()):
+        slug = _ALIASES[m.group(1)]
+        if slug not in seen:
+            seen.append(slug)
+    return seen
+
+
+def _restaurant_name(slug: str | None) -> str | None:
+    return next((r["name"] for r in _SEED_RESTAURANTS if r["slug"] == slug), None)
+
+
+def _price(level: int) -> str:
+    return "₹" * max(1, min(int(level or 1), 4))
+
+
+def _directory() -> str:
+    """One line per restaurant for the system prompt (falls back to seed data if the DB is unavailable)."""
+    try:
+        rows = bs.list_restaurants()
+        zones = {r["slug"]: sorted({t["zone"] for t in bs.list_tables(r["slug"])}) for r in rows}
+    except Exception:
+        rows, zones = [dict(r, slot_minutes=30) for r in _SEED_RESTAURANTS], {}
+    lines = []
+    for r in rows:
+        close = r["hours_close"]
+        last = (datetime.strptime(close, "%H:%M") - timedelta(minutes=bs.DEFAULT_DURATION)).strftime("%H:%M")
+        z = ", ".join(zones.get(r["slug"], [])) or "ask"
+        lines.append(f"- {r['name']} (restaurant_slug={r['slug']}, codes {r['code_prefix']}-XXXX): "
+                     f"{', '.join(r['cuisine'])} · {r['area']} · {_price(r['price_level'])} (~₹{r['avg_cost_for_two']:,} "
+                     f"for two) · rating {r['rating']} · tags: {', '.join(r['tags'])} · seatings {r['hours_open']}-{last} "
+                     f"(closes {close}) · zones: {z}")
+    return "\n".join(lines)
+
+
 # ====================================================================== tools
+
+class _NeedRestaurant(bs.BookingError):
+    pass
+
 
 def _err(e: Exception) -> str:
     msg = e.message if isinstance(e, bs.BookingError) else f"Unexpected error: {e}"
-    return json.dumps({"error": msg})
+    out: dict[str, Any] = {"error": msg}
+    if isinstance(e, _NeedRestaurant):
+        out["needs_restaurant"] = True
+        out["restaurants"] = list(_SLUGS)
+    return json.dumps(out)
+
+
+def _slug(explicit: str | None, state: dict | None) -> str:
+    slug = resolve_restaurant(explicit) or (explicit or "").strip().lower() or (state or {}).get("current_restaurant")
+    if not slug:
+        raise _NeedRestaurant("No restaurant selected. Ask the guest which restaurant they mean before continuing.")
+    return slug
 
 
 @tool
-def check_availability(date: str, party_size: int, time: str | None = None, zone: str | None = None) -> str:
-    """Check which times have a free table. date: YYYY-MM-DD. party_size: number of guests (1-12).
+def search_restaurants(cuisine: str | None = None, area: str | None = None, price_level: int | None = None,
+                       tags: list[str] | None = None, party_size: int | None = None, date: str | None = None,
+                       time: str | None = None) -> str:
+    """Find Tablewise restaurants in Mumbai and their next open time slots. All filters are optional:
+    cuisine (e.g. Italian, Japanese, Seafood, North Indian, Thali), area (Lower Parel, Bandra, Powai, Juhu, Colaba,
+    Andheri), price_level 1-4 (1 = budget, 4 = splurge), tags (any of: rooftop, bar, live-music, pet-friendly,
+    pure-veg), party_size, date YYYY-MM-DD (default today), time HH:MM (24h; slots at/after it)."""
+    try:
+        if date and "T" in date and not time:
+            date, time = date[:10], date[11:16]
+        rows = bs.search_restaurants(cuisine=cuisine, area=area, price_level=price_level, tags=tags,
+                                     party_size=party_size, date=date, time=time)
+        return json.dumps({"count": len(rows), "date": (date or datetime.now().date().isoformat())[:10],
+                           "party_size": party_size or 2, "restaurants": rows})
+    except Exception as e:
+        return _err(e)
+
+
+@tool
+def check_availability(date: str, party_size: int, state: Annotated[dict, InjectedState],
+                       time: str | None = None, zone: str | None = None, restaurant_slug: str | None = None) -> str:
+    """Check which times have a free table at one restaurant. date: YYYY-MM-DD. party_size: guests (1-12).
     time: optional preferred time HH:MM (24h) - reports whether it is free plus nearest alternatives.
-    zone: optional seating preference: window, garden, bar or private."""
+    zone: optional seating zone (window, garden, bar, private, rooftop, patio - depends on the restaurant).
+    restaurant_slug: which restaurant; defaults to the currently selected one."""
     try:
         if not time and "T" in date:  # model sometimes sends a full ISO datetime
             time = date[11:16]
-        r = bs.check_availability(date, party_size, time, zone)
-        out = {"date": r["date"], "party_size": r["party_size"], "zone": r["zone"],
+        r = bs.check_availability(_slug(restaurant_slug, state), date, party_size, time, zone)
+        out = {"restaurant_slug": r["restaurant_slug"], "restaurant_name": r["restaurant_name"], "date": r["date"],
+               "party_size": r["party_size"], "zone": r["zone"],
                "available_times": [s["time"] for s in r["slots"] if s["available"]]}
         for k in ("requested_time", "requested_available", "nearest_alternatives", "suggested_table"):
             if k in r:
@@ -72,54 +181,60 @@ def check_availability(date: str, party_size: int, time: str | None = None, zone
 
 
 @tool
-def create_booking(guest_name: str, party_size: int, date: str, time: str, phone: str | None = None,
-                   email: str | None = None, zone: str | None = None, notes: str | None = None) -> str:
+def create_booking(guest_name: str, party_size: int, date: str, time: str, state: Annotated[dict, InjectedState],
+                   phone: str | None = None, email: str | None = None, zone: str | None = None,
+                   notes: str | None = None, restaurant_slug: str | None = None) -> str:
     """Create a confirmed reservation. ONLY call after the guest has explicitly confirmed the recap.
-    date: YYYY-MM-DD, time: HH:MM (24h). Provide phone or email. zone: window|garden|bar|private (optional).
-    notes: allergies, occasions, requests (optional)."""
+    date: YYYY-MM-DD, time: HH:MM (24h). Provide phone or email. zone: optional seating zone.
+    notes: allergies, occasions, requests (optional). restaurant_slug: defaults to the currently selected one."""
     try:
-        return json.dumps(bs.create_booking(guest_name=guest_name, party_size=party_size,
-                                            start_time=bs.combine(date, time), phone=phone, email=email,
-                                            zone=zone, notes=notes))
+        return json.dumps(bs.create_booking(_slug(restaurant_slug, state), guest_name=guest_name,
+                                            party_size=party_size, start_time=bs.combine(date, time), phone=phone,
+                                            email=email, zone=zone, notes=notes, source="chat"))
     except Exception as e:
         return _err(e)
 
 
 @tool
-def modify_booking(code: str, date: str | None = None, time: str | None = None,
-                   party_size: int | None = None, zone: str | None = None, notes: str | None = None) -> str:
-    """Change an existing booking identified by its code (EV-XXXX). Any of date (YYYY-MM-DD), time (HH:MM),
-    party_size, zone, notes may be changed; omitted fields keep their current value."""
+def modify_booking(code: str, state: Annotated[dict, InjectedState], date: str | None = None,
+                   time: str | None = None, party_size: int | None = None, zone: str | None = None,
+                   notes: str | None = None, restaurant_slug: str | None = None) -> str:
+    """Change an existing booking identified by its code (e.g. EMB-7K2P). Any of date (YYYY-MM-DD), time (HH:MM),
+    party_size, zone, notes may be changed; omitted fields keep their current value. restaurant_slug is optional
+    (the code identifies the restaurant)."""
     try:
+        slug = resolve_restaurant(restaurant_slug) if restaurant_slug else None
         start = None
         if date or time:
-            cur = datetime.fromisoformat(bs.get_booking(code)["start_time"])
+            cur = datetime.fromisoformat(bs.get_booking(code, slug)["start_time"])
             start = bs.combine(date or cur.date().isoformat(), time or cur.strftime("%H:%M"))
-        return json.dumps(bs.modify_booking(code, start_time=start, party_size=party_size, zone=zone, notes=notes))
+        return json.dumps(bs.modify_booking(code, start_time=start, party_size=party_size, zone=zone, notes=notes,
+                                            restaurant_slug=slug))
     except Exception as e:
         return _err(e)
 
 
 @tool
-def cancel_booking(code: str) -> str:
-    """Cancel the booking with this code (EV-XXXX)."""
+def cancel_booking(code: str, state: Annotated[dict, InjectedState], restaurant_slug: str | None = None) -> str:
+    """Cancel the booking with this code (e.g. EMB-7K2P). restaurant_slug is optional."""
     try:
-        return json.dumps(bs.cancel_booking(code))
+        return json.dumps(bs.cancel_booking(code, resolve_restaurant(restaurant_slug) if restaurant_slug else None))
     except Exception as e:
         return _err(e)
 
 
 @tool
-def lookup_booking(code: str) -> str:
-    """Look up a booking by its code (EV-XXXX) to see its details and status."""
+def lookup_booking(code: str, state: Annotated[dict, InjectedState], restaurant_slug: str | None = None) -> str:
+    """Look up a booking by its code (e.g. EMB-7K2P) to see its details, restaurant and status."""
     try:
-        return json.dumps(bs.get_booking(code))
+        return json.dumps(bs.get_booking(code, resolve_restaurant(restaurant_slug) if restaurant_slug else None))
     except Exception as e:
         return _err(e)
 
 
-TOOLS = [check_availability, create_booking, modify_booking, cancel_booking, lookup_booking]
+TOOLS = [search_restaurants, check_availability, create_booking, modify_booking, cancel_booking, lookup_booking]
 BOOKING_ACTIONS = {"create_booking": "created", "modify_booking": "modified", "cancel_booking": "cancelled"}
+_CODE_RE = re.compile(r"\b[A-Z]{2,3}-[A-Z0-9]{4}\b")
 
 
 # ====================================================================== state & helpers
@@ -130,13 +245,15 @@ class AgentState(TypedDict, total=False):
     retrieved_docs: list[dict]
     tool_results: list[dict]
     booking_draft: dict | None
+    current_restaurant: str | None
 
 
 class Route(BaseModel):
     """Classify the guest's latest message."""
-    intent: Literal["info", "booking", "smalltalk"] = Field(
-        description="info = restaurant questions; booking = availability/reservations/changes/cancellations or "
-                    "continuing a booking conversation; smalltalk = greetings/thanks/chit-chat")
+    intent: Literal["info", "booking", "discover", "smalltalk", "offtopic"] = Field(
+        description="info = questions about a restaurant; booking = availability/reservations/changes/cancellations "
+                    "or continuing a booking conversation; discover = finding or comparing restaurants; "
+                    "smalltalk = greetings/thanks/chit-chat; offtopic = requests unrelated to dining on Tablewise")
 
 
 def _text(content: Any) -> str:
@@ -151,12 +268,13 @@ def _now_context() -> str:
     now = datetime.now()
     days = ", ".join(f"{(now.date() + timedelta(days=i)):%A}={(now.date() + timedelta(days=i)).isoformat()}"
                      for i in range(8))
-    return (f"Current server date/time: {now:%A %d %B %Y, %H:%M}. Today is {now.date().isoformat()}; tomorrow is "
-            f"{(now.date() + timedelta(days=1)).isoformat()}. Upcoming days: {days}.")
+    return (f"Current server date/time (Mumbai): {now:%A %d %B %Y, %H:%M}. Today is {now.date().isoformat()}; "
+            f"tomorrow is {(now.date() + timedelta(days=1)).isoformat()}. Upcoming days: {days}.")
 
 
 def _format_docs(docs: list[dict]) -> str:
-    return "\n\n".join(f"[{d['index']}] ({d['source']} > {d['section']})\n{d['text']}" for d in docs) or "(none)"
+    return "\n\n".join(f"[{d['index']}] ({d.get('restaurant_slug')}/{d['source']} > {d['section']})\n{d['text']}"
+                       for d in docs) or "(none)"
 
 
 def _last_human(msgs: list[AnyMessage]) -> str:
@@ -206,16 +324,34 @@ def _text_history(msgs: list[AnyMessage], limit: int = 30) -> list[AnyMessage]:
     return out
 
 
+_OFF_TOPIC = re.compile(r"\b(python|javascript|code|coding|program|homework|essay|poem|stocks?|crypto|bitcoin|"
+                        r"weather|news|election|politics|movie|translate|math)\b")
+_ON_TOPIC = re.compile(r"menu|dish|food|dinner|lunch|brunch|wine|drink|cocktail|allerg|vegan|veg\b|gluten|table|"
+                       r"reserv|book|park|hour|open|event|chef|private|cancel|restaurant|thali|biryani|sushi|pizza|"
+                       r"[a-z]{3}-[a-z0-9]{4}|" + _ALIAS_RE.pattern)
+_DISCOVER = re.compile(
+    r"\b(recommend\w*|suggest\w*|restaurants?|places?|where (?:can|should|to)|options|rooftop|cuisine|italian|"
+    r"pizza|pasta|japanese|sushi|ramen|pan[- ]asian|seafood|fish|coastal|malvani|thali|gujarati|rajasthani|"
+    r"north indian|mughlai|biryani|kebabs?|pure[- ]veg|vegetarian|cheap|budget|affordable|splurge|fancy|"
+    r"pet[- ]friendly|dog[- ]friendly|live[- ]music|bar|bandra|juhu|powai|colaba|andheri|lower parel)\b")
+
+
 def _heuristic_intent(text: str, msgs: list[AnyMessage]) -> str:
     t = text.lower()
-    if re.search(r"\bev-[a-z0-9]{4}\b|\bbook|reserv|availab|table for|cancel|reschedul|modify|change my|"
-                 r"\bparty of\b|tonight at|tomorrow at", t):
+    if re.search(r"\b[a-z]{2,3}-[a-z0-9]{4}\b|\bbook|reserv|cancel|reschedul|modify|change my", t):
         return "booking"
     if re.fullmatch(r"\s*(hi|hello|hey|thanks|thank you|good (evening|morning|afternoon)|cheers)[!. ]*", t):
         return "smalltalk"
-    # short reply continuing a booking conversation ("yes", "Ana, 555-1234")
+    if _OFF_TOPIC.search(t) and not _ON_TOPIC.search(t):
+        return "offtopic"
+    if _DISCOVER.search(t) and not mentioned_restaurants(t):
+        return "discover"
+    if re.search(r"availab|table for|\bparty of\b|tonight at|tomorrow at", t):
+        return "booking"
+    # short reply continuing a booking conversation ("yes", "Ana, 98200 12345")
     prior = [m for m in msgs[:-1] if isinstance(m, AIMessage)]
-    if prior and len(t.split()) <= 8 and re.search(r"confirm|book|reserv|name|phone|email", _text(prior[-1].content).lower()):
+    if prior and len(t.split()) <= 8 and re.search(r"confirm|book|reserv|name|phone|email|which restaurant",
+                                                   _text(prior[-1].content).lower()):
         return "booking"
     return "info"
 
@@ -227,53 +363,74 @@ def _write_tokens(writer, text: str) -> None:
 
 # ====================================================================== prompts
 
-ROUTER_PROMPT = """You route messages for the Ember & Vine restaurant concierge.
+ROUTER_PROMPT = """You route messages for the Tablewise restaurant concierge (six restaurants in Mumbai).
 Classify the guest's LATEST message:
 - booking: checking availability, making/changing/confirming/cancelling a reservation, giving booking details
-  (party size, date, time, name, phone, email, booking code like EV-7K2P), or replying yes/no to a booking question.
-- info: questions about the restaurant - menu, dishes, allergens, diets, hours, location, parking, policies, events,
-  private dining, wine, corkage.
+  (restaurant, party size, date, time, name, phone, email, booking code like EMB-7K2P), or replying yes/no to a
+  booking question.
+- discover: finding, recommending or comparing restaurants - by cuisine, area, budget, vibe (rooftop, live music,
+  pet-friendly, pure-veg) or "who has a table tonight".
+- info: questions about a specific restaurant or Tablewise - menu, dishes, allergens, diets, hours, location,
+  parking, policies, events, private dining.
 - smalltalk: greetings, thanks, chit-chat with no information need.
+- offtopic: anything unrelated to dining at these restaurants - coding, homework, news, finance, general trivia.
 Use the recent conversation: a short reply that continues a booking flow is booking."""
 
-BOOKING_SYSTEM = """You are the reservations concierge for Ember & Vine, an upscale wood-fire restaurant and natural \
-wine bar in San Francisco. You are warm, polished and concise - a great maitre d'.
+GUARDRAIL_REPLY = ("I'm the Tablewise concierge, so I can only help with our Mumbai restaurants - finding a place, "
+                   "reservations, menus, allergens, opening hours and policies. Is there anything I can help you "
+                   "with for your next meal out?")
+
+BOOKING_SYSTEM = """You are the Tablewise concierge: a warm, polished and concise maitre d' for six restaurants \
+in Mumbai. Prices are in Indian rupees (₹).
 {now}
 
-House rules: seatings every 30 minutes from 17:00 to 22:00 (last seating); tables are held 90 minutes; online parties of \
-1-12 (larger parties: events@emberandvine.com). Seating zones: window, garden, bar, private.
+Restaurants:
+{directory}
+
+Currently selected restaurant: {current}
+
+House rules: tables are held 90 minutes; seatings every 30 minutes from opening until last seating (90 minutes \
+before close); online parties of 1-12.
 
 How to work:
-1. Resolve relative dates and times ("tomorrow at 8" -> tomorrow's YYYY-MM-DD, 20:00) from the current date above. \
+1. Discovery: when the guest wants ideas or is choosing ("rooftop in Bandra", "seafood tonight for 4"), call \
+search_restaurants with the filters they gave (cuisine, area, price_level 1-4, tags, party_size, date, time). \
+Present 2-4 matches in one line each with their next open slots (the app also shows cards) and offer to book.
+2. Every availability/booking tool takes restaurant_slug. Use the currently selected restaurant unless the guest \
+names another one. If no restaurant is selected, or the request could mean more than one restaurant, ASK the guest \
+which restaurant they want before checking availability or booking - never guess.
+3. Resolve relative dates and times ("tomorrow at 8" -> tomorrow's YYYY-MM-DD, 20:00) from the current date. \
 Dinner times without am/pm mean pm.
-2. Call check_availability before offering a time. If the requested time is taken, offer the nearest alternatives.
-3. To book you need: party size, date, time, the guest's name, and a phone number or email. Zone and notes \
-(allergies, occasion) are optional.
-4. BEFORE calling create_booking, recap every detail (name, party size, weekday + date, time, zone, contact, notes) \
-and ask the guest to confirm. Only call create_booking after the guest explicitly confirms in a later message - \neven if they gave every detail up front. Pass date as YYYY-MM-DD and time as HH:MM separately.
-5. For changes or cancellations, get the booking code (EV-XXXX), call lookup_booking, then modify_booking or \
+4. Call check_availability before offering a time. If the requested time is taken, offer the nearest alternatives.
+5. To book you need: restaurant, party size, date, time, the guest's name, and a phone number or email. Zone and \
+notes (allergies, occasion) are optional.
+6. BEFORE calling create_booking, recap every detail (restaurant, name, party size, weekday + date, time, zone, \
+contact, notes) and ask the guest to confirm. Only call create_booking after the guest explicitly confirms in a \
+later message - even if they gave every detail up front. Pass date as YYYY-MM-DD and time as HH:MM separately.
+7. For changes or cancellations, get the booking code (e.g. EMB-7K2P), call lookup_booking, then modify_booking or \
 cancel_booking. A direct request to cancel a specific code counts as confirmation.
-6. After a successful booking, give the booking code in bold and mention our 24-hour cancellation policy.
-Never invent availability, tables or booking codes - only state what tools return. Speak in 12-hour times \
-(8:00 pm). Keep replies short and elegant; use bold sparingly for key details.
+8. After a successful booking, give the booking code in bold and mention the restaurant's cancellation policy.
+Never invent restaurants, availability, tables or booking codes - only state what tools return. Speak in 12-hour \
+times (8:00 pm). Keep replies short and elegant; use bold sparingly for key details.
 
-Relevant restaurant information (cite as [n] only if you rely on it):
+Relevant information (cite as [n] only if you rely on it):
 {docs}"""
 
-RESPOND_SYSTEM = """You are the concierge of Ember & Vine, an upscale wood-fire restaurant and natural wine bar in \
-San Francisco. Warm, elegant, concise.
+RESPOND_SYSTEM = """You are the Tablewise concierge for six restaurants in Mumbai. Warm, elegant, concise.
 {now}
+Currently selected restaurant: {current}
 
-Answer the guest's latest message using ONLY the restaurant information below. Cite the sources you use inline as \
-[1], [2] matching the numbers. If the information doesn't cover the question, say so graciously and offer the host \
-stand at (415) 555-0142. Keep it to 2-6 sentences or a short list. If natural, offer to reserve a table.
+Answer the guest's latest message using ONLY the information below. Cite the sources you use inline as [1], [2] \
+matching the numbers, and name the restaurant when it isn't obvious. If the information doesn't cover the question, \
+say so graciously and suggest calling the restaurant. Keep it to 2-6 sentences or a short list. If natural, offer to \
+reserve a table.
 
-Restaurant information:
+Information:
 {docs}"""
 
-SMALLTALK_SYSTEM = """You are the concierge of Ember & Vine, an upscale wood-fire restaurant and natural wine bar. \
-{now} Reply briefly (1-2 sentences), warmly and with a little charm. Offer to help with a reservation or questions \
-about the menu, allergens, hours, parking or events."""
+SMALLTALK_SYSTEM = """You are the Tablewise concierge for six restaurants in Mumbai. {now} Reply briefly \
+(1-2 sentences), warmly and with a little charm. Offer to help find a restaurant, book a table, or answer questions \
+about menus, allergens, hours or policies."""
 
 
 # ====================================================================== nodes
@@ -295,11 +452,17 @@ async def router(state: AgentState) -> dict:
             ])
             intent = route.intent if isinstance(route, Route) else dict(route).get("intent")
         except Exception:
+            metrics.LLM_ERRORS.inc()
             intent = None  # fall back to heuristics (e.g. model without forced tool_choice support)
-    if intent not in ("info", "booking", "smalltalk"):
+    if intent not in INTENTS:
         intent = _heuristic_intent(last, msgs)
-    writer({"type": "node", "node": "router", "status": "end", "intent": intent})
-    return {"intent": intent, "tool_results": []}
+    update: dict[str, Any] = {"intent": intent, "tool_results": []}
+    named = mentioned_restaurants(last)
+    if len(named) == 1:  # the guest picked a restaurant in chat
+        update["current_restaurant"] = named[0]
+    writer({"type": "node", "node": "router", "status": "end", "intent": intent,
+            "restaurant_slug": update.get("current_restaurant", state.get("current_restaurant"))})
+    return update
 
 
 async def retrieve(state: AgentState) -> dict:
@@ -309,7 +472,8 @@ async def retrieve(state: AgentState) -> dict:
     query = humans[-1] if humans else ""
     if len(query.split()) < 5 and len(humans) > 1:  # "yes please" -> add previous turn for context
         query = humans[-2] + " " + query
-    docs = await asyncio.to_thread(rag.retrieve, query, 4)
+    slug = None if state.get("intent") == "discover" else state.get("current_restaurant")
+    docs = await asyncio.to_thread(rag.retrieve, query, 4, slug)
     return {"retrieved_docs": docs}
 
 
@@ -317,7 +481,8 @@ async def booking_agent(state: AgentState) -> dict:
     writer = get_stream_writer()
     writer({"type": "node", "node": "booking_agent", "status": "start"})
     msgs = state["messages"]
-    # collect tool results produced since the last human turn, and track the booking draft
+    current = state.get("current_restaurant")
+    # collect tool results produced since the last human turn, and track the booking draft + chosen restaurant
     tool_results, draft = [], dict(state.get("booking_draft") or {})
     for m in reversed(msgs):
         if isinstance(m, HumanMessage):
@@ -331,119 +496,191 @@ async def booking_agent(state: AgentState) -> dict:
             for tc in m.tool_calls:
                 if tc["name"] in ("check_availability", "create_booking"):
                     draft.update({k: v for k, v in tc["args"].items() if v is not None})
-    update: dict[str, Any] = {"tool_results": tool_results, "booking_draft": draft or None}
+                    picked = resolve_restaurant(tc["args"].get("restaurant_slug"))
+                    if picked and current is None:
+                        current = picked
+    for tr in reversed(tool_results):  # latest successful restaurant-scoped result wins
+        res = tr["result"]
+        if isinstance(res, dict) and res.get("restaurant_slug") and "error" not in res:
+            current = res["restaurant_slug"]
+            break
+    update: dict[str, Any] = {"tool_results": tool_results, "booking_draft": draft or None,
+                              "current_restaurant": current}
 
     if not LLM_ENABLED:
-        update["messages"] = [_offline_booking(msgs, writer)]
+        update["messages"] = [_offline_booking(msgs, writer, state.get("intent"), current)]
         return update
 
-    system = SystemMessage(content=BOOKING_SYSTEM.format(now=_now_context(),
-                                                         docs=_format_docs(state.get("retrieved_docs") or [])))
+    system = SystemMessage(content=BOOKING_SYSTEM.format(
+        now=_now_context(), directory=_directory(),
+        current=f"{_restaurant_name(current)} (restaurant_slug={current})" if current else "none - ask if needed",
+        docs=_format_docs(state.get("retrieved_docs") or [])))
     msg = await _llm(1500).bind_tools(TOOLS).ainvoke([system] + _sanitize(msgs))
     update["messages"] = [msg]
     return update
+
+
+async def guardrail(state: AgentState) -> dict:
+    """Politely decline off-topic requests: no retrieval, no tools, no LLM call."""
+    writer = get_stream_writer()
+    writer({"type": "node", "node": "guardrail", "status": "start"})
+    _write_tokens(writer, GUARDRAIL_REPLY)
+    return {"messages": [AIMessage(content=GUARDRAIL_REPLY)]}
 
 
 async def respond(state: AgentState) -> dict:
     writer = get_stream_writer()
     writer({"type": "node", "node": "respond", "status": "start"})
     intent = state.get("intent")
-    if intent == "booking":
+    if intent in ("booking", "discover"):
         return {}  # booking_agent already wrote (and streamed) the guest-facing reply, grounded in the same docs
     docs = state.get("retrieved_docs") or []
+    current = state.get("current_restaurant")
     if not LLM_ENABLED:
         if intent == "smalltalk":
-            text = ("Good evening, and welcome to Ember & Vine. I'm your concierge - ask me about the menu, "
-                    "allergens, hours or events, or let me check a table for you.")
+            text = ("Welcome to Tablewise. I'm your concierge - tell me what you're in the mood for and I'll find "
+                    "a restaurant, check a table, or answer questions about menus, allergens and hours.")
         elif docs:
             top = docs[0]
             snippet = top["text"].split("\n\n", 1)[-1][:700].strip()
-            text = (f"*(Offline demo mode - set ANTHROPIC_API_KEY for full answers.)* Here's the most relevant "
-                    f"passage from our guide [1]:\n\n> {snippet.replace(chr(10), chr(10) + '> ')}")
+            text = (f"*(Offline demo mode - set an LLM API key for full answers.)* Here's the most relevant "
+                    f"passage [1]:\n\n> {snippet.replace(chr(10), chr(10) + '> ')}")
         else:
-            text = "I couldn't find that in our guide - please call the host stand at (415) 555-0142."
+            text = "I couldn't find that in our guides - please call the restaurant directly."
         _write_tokens(writer, text)
         return {"messages": [AIMessage(content=text)]}
 
     if intent == "smalltalk":
         system = SMALLTALK_SYSTEM.format(now=_now_context())
     else:
-        system = RESPOND_SYSTEM.format(now=_now_context(), docs=_format_docs(docs))
+        system = RESPOND_SYSTEM.format(now=_now_context(), current=_restaurant_name(current) or "none",
+                                       docs=_format_docs(docs))
     msg = await _llm(1200).ainvoke([SystemMessage(content=system)] + _text_history(state["messages"]))
     return {"messages": [AIMessage(content=_text(msg.content), id=msg.id)]}
 
 
-# ====================================================================== offline booking (no API key)
+# ====================================================================== offline mode (no API key)
 
 _WEEKDAYS = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"]
+_CUISINE_WORDS = {"italian": "Italian", "pizza": "Pizza", "pasta": "Italian", "japanese": "Japanese",
+                  "sushi": "Japanese", "ramen": "Japanese", "pan-asian": "Pan-Asian", "seafood": "Seafood",
+                  "fish": "Seafood", "coastal": "Coastal", "malvani": "Malvani", "thali": "Thali",
+                  "gujarati": "Gujarati", "rajasthani": "Rajasthani", "north indian": "North Indian",
+                  "mughlai": "Mughlai", "biryani": "Mughlai", "kebab": "Mughlai", "wood-fire": "Wood-fire",
+                  "european": "Modern European"}
+_AREAS = ("lower parel", "bandra", "powai", "juhu", "colaba", "andheri")
+_TAG_WORDS = {"rooftop": "rooftop", "live music": "live-music", "live-music": "live-music",
+              "pet-friendly": "pet-friendly", "pet friendly": "pet-friendly", "dog": "pet-friendly",
+              "pure veg": "pure-veg", "pure-veg": "pure-veg", "vegetarian": "pure-veg", " bar": "bar"}
 
 
-def _offline_booking(msgs: list[AnyMessage], writer) -> AIMessage:
+def _parse_when(low: str) -> dict[str, Any]:
+    today = datetime.now().date()
+    day = today
+    if "tomorrow" in low:
+        day = today + timedelta(days=1)
+    else:
+        iso = re.search(r"\d{4}-\d{2}-\d{2}", low)
+        wd = next((i for i, w in enumerate(_WEEKDAYS) if w in low), None)
+        if iso:
+            day = datetime.fromisoformat(iso.group(0)).date()
+        elif wd is not None:
+            day = today + timedelta(days=(wd - today.weekday()) % 7 or 7)
+    party = re.search(r"(?:for|party of|table for)\s+(\d{1,2})\b|(\d{1,2})\s*(?:people|guests|persons|pax)", low)
+    size = int(next(g for g in party.groups() if g)) if party else 2
+    tm = re.search(r"(?:at|@)\s*(\d{1,2})(?::(\d{2}))?\s*(am|pm)?|(\d{1,2})(?::(\d{2}))?\s*(am|pm)", low)
+    out: dict[str, Any] = {"date": day.isoformat(), "party_size": size}
+    if tm:
+        h, mnt, ap = (tm.group(1), tm.group(2), tm.group(3)) if tm.group(1) else (tm.group(4), tm.group(5), tm.group(6))
+        hour = int(h)
+        if ap == "am" and hour == 12:
+            hour = 0
+        elif ap != "am" and hour < 12:  # pm, or no suffix: dinner times mean pm
+            hour += 12
+        out["time"] = f"{hour:02d}:{mnt or '00'}"
+    return out
+
+
+def _offline_summary(results: list[dict]) -> str:
+    lines = []
+    for r in results:
+        if "error" in r:
+            if r.get("needs_restaurant"):
+                lines.append("Which restaurant would you like? Options: " +
+                             ", ".join(_restaurant_name(s) or s for s in r.get("restaurants", [])) + ".")
+            else:
+                lines.append(f"Hmm - {r['error']}")
+        elif "restaurants" in r:
+            if not r["restaurants"]:
+                lines.append("I couldn't find a restaurant matching that - try fewer filters.")
+            for x in r["restaurants"]:
+                slots = ", ".join(x["next_slots"]) or "no open slots"
+                lines.append(f"- **{x['name']}** - {', '.join(x['cuisine'])}, {x['area']} "
+                             f"({_price(x['price_level'])}). Next tables: {slots}.")
+        elif "code" in r:
+            lines.append(f"Booking **{r['code']}** at {r.get('restaurant_name')} for {r['guest_name']} "
+                         f"({r['party_size']} guests) on {r['start_time'].replace('T', ' at ')[:16]} at table "
+                         f"{r['table_name']} is **{r['status']}**.")
+        elif "available_times" in r:
+            where = r.get("restaurant_name") or ""
+            if r.get("requested_time"):
+                ok = r.get("requested_available")
+                lines.append(f"{where}: {r['requested_time']} on {r['date']} for {r['party_size']} is "
+                             f"{'**available**' if ok else 'taken'}." +
+                             ("" if ok else f" Nearest options: {', '.join(r.get('nearest_alternatives') or []) or 'none'}."))
+            else:
+                lines.append(f"{where}: open times on {r['date']} for {r['party_size']}: "
+                             f"{', '.join(r['available_times']) or 'none'}.")
+    lines.append("\n*(Offline demo mode: I can search restaurants, check availability, look up and cancel bookings. "
+                 "Use the booking panel to reserve, or set an LLM API key for the full concierge.)*")
+    return "\n".join(lines)
+
+
+def _offline_booking(msgs: list[AnyMessage], writer, intent: str | None = None,
+                     current: str | None = None) -> AIMessage:
     last = msgs[-1]
     if isinstance(last, ToolMessage):
         results = []
         for m in reversed(msgs):
             if not isinstance(m, ToolMessage):
                 break
-            results.insert(0, json.loads(m.content))
-        lines = []
-        for r in results:
-            if "error" in r:
-                lines.append(f"Hmm - {r['error']}")
-            elif "code" in r:
-                lines.append(f"Booking **{r['code']}** for {r['guest_name']} ({r['party_size']} guests) on "
-                             f"{r['start_time'].replace('T', ' at ')[:16]} at table {r['table_name']} is "
-                             f"**{r['status']}**.")
-            elif "available_times" in r:
-                if r.get("requested_time"):
-                    ok = r.get("requested_available")
-                    lines.append(f"{r['requested_time']} on {r['date']} for {r['party_size']} is "
-                                 f"{'**available**' if ok else 'taken'}." +
-                                 ("" if ok else f" Nearest options: {', '.join(r.get('nearest_alternatives') or []) or 'none'}."))
-                else:
-                    lines.append(f"Open times on {r['date']} for {r['party_size']}: "
-                                 f"{', '.join(r['available_times']) or 'none'}.")
-        lines.append("\n*(Offline demo mode: I can check availability, look up and cancel bookings. "
-                     "Use the booking panel to reserve, or set ANTHROPIC_API_KEY for the full concierge.)*")
-        text = "\n".join(lines)
+            try:
+                results.insert(0, json.loads(m.content))
+            except (TypeError, ValueError):
+                results.insert(0, {"error": str(m.content)})
+        text = _offline_summary(results)
         _write_tokens(writer, text)
         return AIMessage(content=text)
 
     text = _last_human(msgs)
     low = text.lower()
-    code = re.search(r"\bEV-[A-Z0-9]{4}\b", text.upper())
-    call: dict | None = None
+    code = _CODE_RE.search(text.upper())
     if code and "cancel" in low:
         call = {"name": "cancel_booking", "args": {"code": code.group(0)}}
     elif code:
         call = {"name": "lookup_booking", "args": {"code": code.group(0)}}
+    elif intent == "discover":
+        when = _parse_when(low)
+        args: dict[str, Any] = {"party_size": when["party_size"], "date": when["date"]}
+        if "time" in when:
+            args["time"] = when["time"]
+        cuisine = next((v for k, v in _CUISINE_WORDS.items() if k in low), None)
+        area = next((a for a in _AREAS if a in low), None)
+        tags = sorted({v for k, v in _TAG_WORDS.items() if k in f" {low}"})
+        if cuisine:
+            args["cuisine"] = cuisine
+        if area:
+            args["area"] = area
+        if tags:
+            args["tags"] = tags
+        call = {"name": "search_restaurants", "args": args}
     else:
-        today = datetime.now().date()
-        day = today
-        if "tomorrow" in low:
-            day = today + timedelta(days=1)
-        else:
-            iso = re.search(r"\d{4}-\d{2}-\d{2}", low)
-            wd = next((i for i, w in enumerate(_WEEKDAYS) if w in low), None)
-            if iso:
-                day = datetime.fromisoformat(iso.group(0)).date()
-            elif wd is not None:
-                day = today + timedelta(days=(wd - today.weekday()) % 7 or 7)
-        party = re.search(r"(?:for|party of|table for)\s+(\d{1,2})|(\d{1,2})\s*(?:people|guests|persons|pax)", low)
-        size = int(next(g for g in party.groups() if g)) if party else 2
-        tm = re.search(r"(?:at|@)\s*(\d{1,2})(?::(\d{2}))?\s*(am|pm)?|(\d{1,2})(?::(\d{2}))?\s*(am|pm)", low)
-        args: dict[str, Any] = {"date": day.isoformat(), "party_size": size}
-        if tm:
-            h, mnt, ap = (tm.group(1), tm.group(2), tm.group(3)) if tm.group(1) else (tm.group(4), tm.group(5), tm.group(6))
-            hour = int(h)
-            if ap == "am" and hour == 12:
-                hour = 0
-            elif ap != "am" and hour < 12:  # pm, or no suffix: dinner times mean pm
-                hour += 12
-            args["time"] = f"{hour:02d}:{mnt or '00'}"
+        args = _parse_when(low)
         zone = next((z for z in bs.ZONES if z in low), None)
         if zone:
             args["zone"] = zone
+        if current:
+            args["restaurant_slug"] = current
         call = {"name": "check_availability", "args": args}
     return AIMessage(content="", tool_calls=[{**call, "id": f"offline_{uuid.uuid4().hex[:10]}", "type": "tool_call"}])
 
@@ -451,11 +688,11 @@ def _offline_booking(msgs: list[AnyMessage], writer) -> AIMessage:
 # ====================================================================== graph
 
 def _after_router(state: AgentState) -> str:
-    return "respond" if state.get("intent") == "smalltalk" else "retrieve"
+    return {"smalltalk": "respond", "offtopic": "guardrail"}.get(state.get("intent") or "", "retrieve")
 
 
 def _after_retrieve(state: AgentState) -> str:
-    return "booking_agent" if state.get("intent") == "booking" else "respond"
+    return "booking_agent" if state.get("intent") in ("booking", "discover") else "respond"
 
 
 def _after_agent(state: AgentState) -> str:
@@ -470,8 +707,10 @@ def build_graph():
     g.add_node("booking_agent", booking_agent)
     g.add_node("tools", ToolNode(TOOLS))
     g.add_node("respond", respond)
+    g.add_node("guardrail", guardrail)
     g.add_edge(START, "router")
-    g.add_conditional_edges("router", _after_router, ["retrieve", "respond"])
+    g.add_conditional_edges("router", _after_router, ["retrieve", "respond", "guardrail"])
+    g.add_edge("guardrail", END)
     g.add_conditional_edges("retrieve", _after_retrieve, ["booking_agent", "respond"])
     g.add_conditional_edges("booking_agent", _after_agent, ["tools", "respond"])
     g.add_edge("tools", "booking_agent")
@@ -482,10 +721,14 @@ def build_graph():
 GRAPH = build_graph()
 
 
-async def run_chat(message: str, thread_id: str) -> AsyncIterator[dict]:
-    """Run one guest turn and yield UI events."""
+async def run_chat(message: str, thread_id: str, restaurant_slug: str | None = None) -> AsyncIterator[dict]:
+    """Run one guest turn and yield UI events. restaurant_slug (from the restaurant page) selects the restaurant."""
+    started = _time.perf_counter()
     config = {"configurable": {"thread_id": thread_id}, "recursion_limit": 30}
-    inputs = {"messages": [HumanMessage(content=message)], "intent": "", "retrieved_docs": [], "tool_results": []}
+    inputs: dict[str, Any] = {"messages": [HumanMessage(content=message)], "intent": "", "retrieved_docs": [],
+                              "tool_results": []}
+    if restaurant_slug:
+        inputs["current_restaurant"] = resolve_restaurant(restaurant_slug) or restaurant_slug
     intent, docs, streamed = "", [], []
     try:
         async for mode, chunk in GRAPH.astream(inputs, config, stream_mode=["custom", "messages", "updates"]):
@@ -530,13 +773,21 @@ async def run_chat(message: str, thread_id: str) -> AsyncIterator[dict]:
                                    "result": payload}
                             if m.name in BOOKING_ACTIONS and isinstance(payload, dict) and "code" in payload:
                                 yield {"type": "booking", "action": BOOKING_ACTIONS[m.name], "booking": payload}
+                            if (m.name == "search_restaurants" and isinstance(payload, dict)
+                                    and payload.get("restaurants")):
+                                yield {"type": "restaurants", "restaurants": payload["restaurants"]}
         full = "".join(streamed)
         if intent == "info":
             sources = docs
-        else:  # booking: only chips for docs the agent actually cited
+        else:  # booking/discover: only chips for docs the agent actually cited
             sources = [d for d in docs if f"[{d['index']}]" in full]
         if sources:
             yield {"type": "sources", "sources": sources}
     except Exception as e:  # surface errors to the UI instead of a dead stream
+        if LLM_ENABLED:
+            metrics.LLM_ERRORS.inc()
         yield {"type": "error", "message": f"{type(e).__name__}: {e}"}
+    finally:
+        metrics.CHAT_REQUESTS.labels(intent=intent or "unknown").inc()
+        metrics.CHAT_LATENCY.observe(_time.perf_counter() - started)
     yield {"type": "done"}

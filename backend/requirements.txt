@@ -252,6 +252,12 @@ packaging==26.3
     #   onnxruntime
 pillow==12.3.0
     # via fastembed
+prometheus-client==0.26.0
+    # via
+    #   prometheus-fastapi-instrumentator
+    #   tablewise-backend
+prometheus-fastapi-instrumentator==8.1.0
+    # via tablewise-backend
 propcache==0.5.4
     # via
     #   aiohttp
@@ -261,6 +267,10 @@ protobuf==7.36.2
     #   googleapis-common-protos
     #   onnxruntime
     #   opentelemetry-proto
+psycopg==3.3.6
+    # via tablewise-backend
+psycopg-binary==3.3.6 ; implementation_name != 'pypy'
+    # via psycopg
 py-rust-stemmers==0.1.8
     # via fastembed
 pybase64==1.5.1
@@ -354,6 +364,7 @@ starlette==1.7.0
     # via
     #   fastapi
     #   mcp
+    #   prometheus-fastapi-instrumentator
     #   sse-starlette
 tenacity==9.2.1
     # via
@@ -396,6 +407,7 @@ typing-extensions==4.16.0
     #   opentelemetry-exporter-otlp-proto-grpc
     #   opentelemetry-sdk
     #   opentelemetry-semantic-conventions
+    #   psycopg
     #   pydantic
     #   pydantic-core
     #   referencing
@@ -409,6 +421,8 @@ typing-inspection==0.4.4
     #   mcp
     #   pydantic
     #   pydantic-settings
+tzdata==2026.5 ; sys_platform == 'win32'
+    # via psycopg
 urllib3==2.8.0
     # via
     #   kubernetes
