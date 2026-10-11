@@ -2,15 +2,15 @@ import { useLayoutEffect, useRef, useState } from 'react';
 import { motion } from 'framer-motion';
 import type { Booking } from '../lib/types';
 import { formatDay, hhmm } from '../lib/time';
-
-const ZONE_LABEL: Record<string, string> = { window: 'Window', garden: 'Garden', bar: 'Bar', private: 'Private' };
-export const zoneLabel = (z: string | null | undefined) => (z ? ZONE_LABEL[z] ?? z : '—');
+import { zoneLabel } from '../lib/zones';
+import { STATUS_LABEL, hasExtras, statusOf } from '../lib/booking';
+import { BookingExtrasView } from './BookingBits';
 
 function Barcode({ code }: { code: string }) {
   const bars = Array.from(code + code).map((c, i) => 1 + ((c.charCodeAt(0) * (i + 3)) % 4));
   let x = 0;
   return (
-    <svg viewBox={`0 0 ${bars.reduce((s, b) => s + b + 2, 0)} 30`} className="h-8 w-40" preserveAspectRatio="none" aria-hidden>
+    <svg viewBox={`0 0 ${bars.reduce((s, b) => s + b + 2, 0)} 30`} className="h-8 w-32 min-w-0 shrink sm:w-40" preserveAspectRatio="none" aria-hidden>
       {bars.map((b, i) => {
         const r = <rect key={i} x={x} y={0} width={b} height={30} style={{ fill: 'currentColor' }} />;
         x += b + 2;
@@ -36,8 +36,10 @@ export default function Ticket({ booking, compact = false, action }: { booking: 
   const n = compact ? 9 : 15;
   const mask = `radial-gradient(circle ${n}px at 0 ${cutY}px, transparent ${n - 0.5}px, #000 ${n}px) left / 51% 100% no-repeat, radial-gradient(circle ${n}px at 100% ${cutY}px, transparent ${n - 0.5}px, #000 ${n}px) right / 51% 100% no-repeat`;
   const date = booking.start_time.slice(0, 10);
-  const cancelled = booking.status === 'cancelled' || action === 'cancelled';
-  const status = action === 'modified' ? 'Updated' : cancelled ? 'Cancelled' : 'Confirmed';
+  const st = action === 'cancelled' ? 'cancelled' : statusOf(booking);
+  const cancelled = st === 'cancelled';
+  const status = action === 'modified' && !cancelled ? 'Updated' : STATUS_LABEL[st];
+  const statusInk = st === 'confirmed' ? 'var(--ember)' : `color-mix(in oklab, var(--st-${st}) 70%, var(--ticket-ink))`;
   return (
     <motion.div
       initial={{ opacity: 0, y: 24, rotateX: -18, scale: 0.97 }}
@@ -48,24 +50,24 @@ export default function Ticket({ booking, compact = false, action }: { booking: 
     >
       <div className="ticket relative overflow-hidden rounded-3xl" style={{ WebkitMask: mask, mask }}>
         <div className="sheen sheen-once" />
-        <div ref={topRef} className={compact ? 'px-5 pb-4 pt-4' : 'px-7 pb-7 pt-6'}>
-          <div className="flex items-center justify-between text-[10px] font-semibold uppercase tracking-[0.28em] opacity-70">
-            <span>Ember &amp; Vine</span>
-            <span className={`flex items-center gap-1.5 ${cancelled ? 'text-danger' : 'text-ember'}`}>
+        <div ref={topRef} className={compact ? 'px-5 pb-4 pt-4' : 'px-5 pb-6 pt-5 sm:px-7 sm:pb-7 sm:pt-6'}>
+          <div className="flex items-center justify-between gap-3 text-[10px] font-semibold uppercase tracking-[0.2em] opacity-70 sm:tracking-[0.28em]">
+            <span className="min-w-0 truncate">{booking.restaurant_name ?? 'Tablewise'}</span>
+            <span className="flex shrink-0 items-center gap-1.5" style={{ color: statusInk }}>
               <span className="h-1.5 w-1.5 rounded-full bg-current" /> {status}
             </span>
           </div>
           {!compact && <p className="mt-5 text-xs uppercase tracking-[0.2em] opacity-60">Reservation for</p>}
-          <p className={compact ? 'mt-2 text-sm opacity-80' : 'mt-1 font-display text-2xl'}>{booking.guest_name}</p>
+          <p className={compact ? 'mt-2 text-sm opacity-80' : 'mt-1 break-words font-display text-2xl'}>{booking.guest_name}</p>
           <p
-            className={`font-display font-semibold tracking-tight text-ember-gradient ${compact ? 'mt-1 text-3xl' : 'mt-4 text-6xl'} ${cancelled ? 'line-through opacity-60' : ''}`}
+            className={`font-display font-semibold tracking-tight text-ember-gradient ${compact ? 'mt-1 text-3xl' : 'mt-4 text-5xl sm:text-6xl'} ${cancelled ? 'line-through opacity-60' : ''}`}
           >
             {booking.code}
           </p>
           {!compact && <p className="mt-1 text-[11px] uppercase tracking-[0.24em] opacity-50">Booking code</p>}
         </div>
         <div className="mx-6 border-t-2 border-dashed" style={{ borderColor: 'color-mix(in oklab, currentColor 22%, transparent)' }} />
-        <div className={`grid grid-cols-3 gap-y-4 ${compact ? 'px-5 py-4 text-xs' : 'px-7 py-6 text-sm'}`}>
+        <div className={`grid grid-cols-3 gap-x-3 gap-y-4 ${compact ? 'px-5 py-4 text-xs' : 'px-5 py-5 text-sm sm:px-7 sm:py-6'}`}>
           {[
             ['Date', formatDay(date)],
             ['Time', hhmm(booking.start_time)],
@@ -74,16 +76,21 @@ export default function Ticket({ booking, compact = false, action }: { booking: 
             ['Zone', zoneLabel(booking.zone)],
             ['Until', booking.end_time ? hhmm(booking.end_time) : '—'],
           ].map(([k, v]) => (
-            <div key={k}>
+            <div key={k} className="min-w-0">
               <div className="text-[10px] uppercase tracking-[0.22em] opacity-50">{k}</div>
-              <div className={`mt-1 font-display ${compact ? 'text-base' : 'text-lg'}`}>{v}</div>
+              <div className={`mt-1 break-words font-display ${compact ? 'text-base' : 'text-base sm:text-lg'}`}>{v}</div>
             </div>
           ))}
         </div>
+        {hasExtras(booking) && (
+          <div className={compact ? 'px-5 pb-4' : 'px-5 pb-5 sm:px-7 sm:pb-6'}>
+            <BookingExtrasView booking={booking} />
+          </div>
+        )}
         {!compact && (
-          <div className="flex items-center justify-between px-7 pb-6 opacity-70">
+          <div className="flex items-center justify-between gap-3 px-5 pb-5 opacity-70 sm:px-7 sm:pb-6">
             <Barcode code={booking.code} />
-            <span className="font-mono text-xs tracking-widest">{booking.code}</span>
+            <span className="shrink-0 font-mono text-xs tracking-widest">{booking.code}</span>
           </div>
         )}
       </div>

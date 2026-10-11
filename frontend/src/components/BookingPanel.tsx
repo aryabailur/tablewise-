@@ -1,11 +1,15 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from 'react';
+import { useCallback, useEffect, useEffectEvent, useMemo, useRef, useState, type CSSProperties, type FormEvent, type ReactNode } from 'react';
 import { AnimatePresence, motion } from 'framer-motion';
 import confetti from 'canvas-confetti';
 import { CircleAlert, LoaderCircle, Minus, Plus, RotateCcw } from 'lucide-react';
-import type { Availability, Booking, Slot } from '../lib/types';
+import { Link } from 'react-router-dom';
+import type { Allergy, Availability, Booking, BookingSource, Dietary, Occasion, Slot } from '../lib/types';
+import { ALLERGIES, DIETARY, OCCASIONS, allergyLabel } from '../lib/booking';
+import { OccasionIcon } from './BookingBits';
 import { ApiError, BOOKING_CHANGED, createBooking, errorMessage, getAvailability, notifyBookingsChanged } from '../lib/api';
-import { MONTHS, WEEKDAYS, formatDay, nextDays, toISODate } from '../lib/time';
-import Ticket, { zoneLabel } from './Ticket';
+import { MONTHS, WEEKDAYS, formatDay, nextDays, parseISODate, toISODate } from '../lib/time';
+import { zoneLabel } from '../lib/zones';
+import Ticket from './Ticket';
 
 function celebrate() {
   const opts = { colors: ['#ff7a3d', '#e3bc76', '#fbe9d0', '#b8441d', '#7d1f45'], disableForReducedMotion: true, zIndex: 80 };
@@ -19,12 +23,12 @@ function celebrate() {
 function Step({ n, title, aside, children }: { n: string; title: string; aside?: ReactNode; children: ReactNode }) {
   return (
     <div>
-      <div className="mb-4 flex items-baseline justify-between gap-3">
-        <h3 className="flex items-baseline gap-3">
+      <div className="mb-4 flex min-w-0 items-baseline justify-between gap-3">
+        <h3 className="flex shrink-0 items-baseline gap-3">
           <span className="font-display text-sm italic text-gold">{n}</span>
           <span className="text-xs font-semibold uppercase tracking-[0.26em] text-muted">{title}</span>
         </h3>
-        {aside && <span className="text-xs text-faint">{aside}</span>}
+        {aside && <span className="min-w-0 truncate text-right text-xs text-faint">{aside}</span>}
       </div>
       {children}
     </div>
@@ -39,7 +43,10 @@ function DateStrip({ days, value, onChange }: { days: Date[]; value: string; onC
     if (sc && el) sc.scrollTo({ left: el.offsetLeft - sc.clientWidth / 2 + el.clientWidth / 2, behavior: 'smooth' });
   }, [value]);
   return (
-    <div ref={scroller} className="no-scrollbar mask-fade-x relative flex snap-x gap-3 overflow-x-auto px-6 py-3">
+    <div
+      ref={scroller}
+      className="no-scrollbar mask-fade-x relative flex snap-x snap-mandatory scroll-px-4 gap-2.5 overflow-x-auto overscroll-x-contain px-4 py-3 sm:snap-proximity sm:scroll-px-6 sm:gap-3 sm:px-6"
+    >
       {days.map((d, i) => {
         const iso = toISODate(d);
         const sel = iso === value;
@@ -56,7 +63,7 @@ function DateStrip({ days, value, onChange }: { days: Date[]; value: string; onC
             transition={{ delay: i * 0.03 }}
             whileHover={{ y: -3 }}
             whileTap={{ scale: 0.95 }}
-            className={`relative flex w-[76px] shrink-0 snap-center flex-col items-center rounded-2xl border px-2 pb-3 pt-2.5 transition-colors ${
+            className={`relative flex w-[68px] shrink-0 touch-manipulation snap-center flex-col items-center rounded-2xl border px-2 pb-3 pt-2.5 transition-colors sm:w-[76px] ${
               sel ? 'border-transparent text-on-ember' : 'border-line bg-glass text-fg hover:border-line-strong'
             }`}
           >
@@ -67,11 +74,11 @@ function DateStrip({ days, value, onChange }: { days: Date[]; value: string; onC
                 transition={{ type: 'spring', stiffness: 380, damping: 30 }}
               />
             )}
-            <span className="relative text-[10px] font-semibold uppercase tracking-[0.16em] opacity-80">
+            <span className="relative text-[11px] font-semibold uppercase tracking-[0.14em] opacity-80 sm:text-[10px] sm:tracking-[0.16em]">
               {i === 0 ? 'Tonight' : i === 1 ? 'Tmrw' : WEEKDAYS[d.getDay()]}
             </span>
             <span className="relative mt-1 font-display text-3xl leading-none">{d.getDate()}</span>
-            <span className="relative mt-1 text-[11px] uppercase tracking-wider opacity-70">{MONTHS[d.getMonth()]}</span>
+            <span className="relative mt-1 text-xs uppercase tracking-wider opacity-70 sm:text-[11px]">{MONTHS[d.getMonth()]}</span>
           </motion.button>
         );
       })}
@@ -80,19 +87,21 @@ function DateStrip({ days, value, onChange }: { days: Date[]; value: string; onC
 }
 
 function PartyDial({ value, onChange }: { value: number; onChange: (n: number) => void }) {
-  const prev = useRef(value);
-  const dir = value >= prev.current ? 1 : -1;
-  useEffect(() => {
-    prev.current = value;
-  }, [value]);
+  const [prev, setPrev] = useState(value);
+  const [dir, setDir] = useState(1);
+  if (value !== prev) {
+    setPrev(value);
+    setDir(value > prev ? 1 : -1);
+  }
   const R = 64;
-  const btn = 'grid h-11 w-11 place-items-center rounded-full border border-line bg-glass text-fg transition hover:border-ember/60 hover:text-ember disabled:opacity-30';
+  const btn =
+    'grid size-12 shrink-0 touch-manipulation place-items-center rounded-full border border-line bg-glass text-fg transition hover:border-ember/60 hover:text-ember disabled:opacity-30 sm:size-11';
   return (
-    <div className="flex items-center justify-center gap-6">
+    <div className="flex items-center justify-center gap-4 sm:gap-6">
       <button type="button" className={btn} onClick={() => onChange(Math.max(1, value - 1))} disabled={value <= 1} aria-label="Fewer guests">
-        <Minus className="h-4 w-4" />
+        <Minus className="size-5 sm:size-4" />
       </button>
-      <div className="relative h-44 w-44" role="spinbutton" aria-valuenow={value} aria-valuemin={1} aria-valuemax={12} aria-label="Party size">
+      <div className="relative size-40 shrink-0 sm:size-44" role="spinbutton" aria-valuenow={value} aria-valuemin={1} aria-valuemax={12} aria-label="Party size">
         <svg viewBox="0 0 180 180" className="absolute inset-0 h-full w-full -rotate-90">
           <defs>
             <linearGradient id="dial-grad" x1="0" y1="0" x2="1" y2="1">
@@ -148,19 +157,65 @@ function PartyDial({ value, onChange }: { value: number; onChange: (n: number) =
               </motion.span>
             </AnimatePresence>
           </div>
-          <span className="text-[11px] uppercase tracking-[0.24em] text-muted">{value === 1 ? 'guest' : 'guests'}</span>
+          <span className="text-xs uppercase tracking-[0.24em] text-muted sm:text-[11px]">{value === 1 ? 'guest' : 'guests'}</span>
         </div>
       </div>
       <button type="button" className={btn} onClick={() => onChange(Math.min(12, value + 1))} disabled={value >= 12} aria-label="More guests">
-        <Plus className="h-4 w-4" />
+        <Plus className="size-5 sm:size-4" />
       </button>
     </div>
   );
 }
 
-function TimeSlots({ slots, loading, error, value, onChange, onRetry, animKey }: {
-  slots: Slot[]; loading: boolean; error: string | null; value: string | null; onChange: (t: string) => void; onRetry: () => void; animKey: string;
+/** Phones get an even grid of 44px-tall pills; from sm up it is the original wrapping row. */
+const SLOT_ROW = 'grid grid-cols-[repeat(auto-fill,minmax(4.5rem,1fr))] gap-2 sm:flex sm:flex-wrap';
+const SLOT_PILL = 'min-h-11 justify-center px-3 text-[15px] sm:min-h-0 sm:px-4 sm:py-2 sm:text-sm';
+
+/** Staggers the shimmer sweep so a row of placeholders reads as one travelling wave. */
+const wave = (i: number) => ({ '--shimmer-delay': `${i * 70}ms` }) as CSSProperties;
+
+/** Placeholder pills with the same box as a real time pill (padding, type size, tabular digits). */
+function SlotSkeletons() {
+  return (
+    <div role="status" aria-busy="true">
+      <span className="sr-only">Checking which seatings are free…</span>
+      <div aria-hidden className={SLOT_ROW}>
+        {Array.from({ length: 11 }, (_, i) => (
+          <span key={i} className={`shimmer flex items-center rounded-full font-medium tabular-nums ${SLOT_PILL}`} style={wave(i)}>
+            <span className="invisible">00:00</span>
+          </span>
+        ))}
+      </div>
+      <div aria-hidden className="mt-3 flex h-4 items-center">
+        <span className="shimmer-bar block h-2 w-36 rounded-full" />
+      </div>
+    </div>
+  );
+}
+
+/** Placeholder table chips: a name block and a zone/seats line, sized like the real chips. */
+function TableSkeletons() {
+  return (
+    <div aria-busy="true">
+      <span className="sr-only">Loading tables…</span>
+      <div aria-hidden className="flex flex-wrap gap-2">
+        {['w-24', 'w-28', 'w-20'].map((w, i) => (
+          <span key={w} className="shimmer flex items-center gap-2.5 rounded-2xl px-4 py-2.5" style={wave(i + 2)}>
+            <span className="flex h-7 items-center">
+              <span className="shimmer-bar block h-4 w-9 rounded-full" />
+            </span>
+            <span className={`shimmer-bar block h-2.5 rounded-full ${w}`} />
+          </span>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function TimeSlots({ slots, pending, loading, error, value, onChange, onRetry, animKey }: {
+  slots: Slot[]; pending: boolean; loading: boolean; error: string | null; value: string | null; onChange: (t: string) => void; onRetry: () => void; animKey: string;
 }) {
+  if (pending) return <SlotSkeletons />;
   if (error)
     return (
       <div className="flex items-start gap-3 rounded-2xl border border-danger/30 bg-danger/10 p-4 text-sm text-fg">
@@ -171,19 +226,11 @@ function TimeSlots({ slots, loading, error, value, onChange, onRetry, animKey }:
         </button>
       </div>
     );
-  if (loading && !slots.length)
-    return (
-      <div className="flex flex-wrap gap-2">
-        {Array.from({ length: 11 }, (_, i) => (
-          <span key={i} className="skeleton h-9 w-[68px] rounded-full" />
-        ))}
-      </div>
-    );
   if (!slots.length) return <p className="text-sm text-muted">No seatings on this date.</p>;
   const open = slots.filter((s) => s.available).length;
   return (
     <div>
-      <motion.div key={animKey} initial="hidden" animate="show" variants={{ show: { transition: { staggerChildren: 0.035 } } }} className="flex flex-wrap gap-2">
+      <motion.div key={animKey} initial="hidden" animate="show" variants={{ show: { transition: { staggerChildren: 0.035 } } }} className={SLOT_ROW}>
         {slots.map((s) => {
           const sel = s.time === value;
           return (
@@ -195,7 +242,7 @@ function TimeSlots({ slots, loading, error, value, onChange, onRetry, animKey }:
               aria-pressed={sel}
               variants={{ hidden: { opacity: 0, y: 10, scale: 0.9 }, show: { opacity: 1, y: 0, scale: 1 } }}
               whileHover={s.available ? { y: -2 } : undefined}
-              className={`relative rounded-full px-4 py-2 text-sm font-medium tabular-nums transition-colors ${
+              className={`relative flex touch-manipulation items-center rounded-full font-medium tabular-nums transition-colors ${SLOT_PILL} ${
                 !s.available
                   ? 'cursor-not-allowed border border-dashed border-line text-faint line-through'
                   : sel
@@ -216,16 +263,42 @@ function TimeSlots({ slots, loading, error, value, onChange, onRetry, animKey }:
   );
 }
 
-export default function BookingPanel() {
-  const days = useMemo(() => nextDays(14), []);
-  const [date, setDate] = useState(() => toISODate(days[0]));
-  const [party, setParty] = useState(2);
+export interface BookingPanelProps {
+  slug: string;
+  restaurantName: string;
+  initialDate?: string | null;
+  initialParty?: number | null;
+  initialTime?: string | null;
+  /** Booking-focused layout (the /book entry point): smaller heading. */
+  compact?: boolean;
+  source?: BookingSource;
+}
+
+const clampParty = (n: number | null | undefined) => (n && Number.isFinite(n) ? Math.min(12, Math.max(1, Math.round(n))) : 2);
+
+export default function BookingPanel({ slug, restaurantName, initialDate, initialParty, initialTime, compact = false, source = 'web' }: BookingPanelProps) {
+  const days = useMemo(() => {
+    // Two weeks ahead, stretched if a deep link asks for a later night.
+    const today = toISODate(new Date());
+    const ahead = initialDate && /^\d{4}-\d{2}-\d{2}$/.test(initialDate) && initialDate > today ? Math.round((parseISODate(initialDate).getTime() - parseISODate(today).getTime()) / 86400000) + 1 : 0;
+    return nextDays(Math.min(60, Math.max(14, ahead)));
+  }, [initialDate]);
+  const [date, setDate] = useState(() => {
+    const first = toISODate(days[0]);
+    return initialDate && days.some((d) => toISODate(d) === initialDate) ? initialDate : first;
+  });
+  const [party, setParty] = useState(() => clampParty(initialParty));
   const [avail, setAvail] = useState<Availability | null>(null);
+  const [availFor, setAvailFor] = useState('');
   const [loading, setLoading] = useState(true);
   const [availError, setAvailError] = useState<string | null>(null);
-  const [time, setTime] = useState<string | null>(null);
+  const [time, setTime] = useState<string | null>(initialTime && /^\d{2}:\d{2}$/.test(initialTime) ? initialTime : null);
   const [tableId, setTableId] = useState<number | null>(null);
-  const [form, setForm] = useState({ name: '', phone: '', email: '', notes: '' });
+  const [form, setForm] = useState({ name: '', phone: '', email: '', requests: '' });
+  const [allergies, setAllergies] = useState<Allergy[]>([]);
+  const [dietary, setDietary] = useState<Dietary>('none');
+  const [occasion, setOccasion] = useState<Occasion>('none');
+  const toggleAllergy = (a: Allergy) => setAllergies((xs) => (xs.includes(a) ? xs.filter((x) => x !== a) : [...xs, a]));
   const [touched, setTouched] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
@@ -238,9 +311,10 @@ export default function BookingPanel() {
       setLoading(true);
       if (!silent) setAvail(null);
       try {
-        const a = await getAvailability(date, party);
+        const a = await getAvailability(slug, date, party);
         if (id !== reqId.current) return;
         setAvail(a && Array.isArray(a.slots) ? a : { date, party_size: party, slots: [] });
+        setAvailFor(`${date}|${party}`);
         setAvailError(null);
       } catch (e) {
         if (id !== reqId.current) return;
@@ -249,7 +323,7 @@ export default function BookingPanel() {
         if (id === reqId.current) setLoading(false);
       }
     },
-    [date, party],
+    [slug, date, party],
   );
 
   useEffect(() => {
@@ -257,28 +331,30 @@ export default function BookingPanel() {
     return () => window.clearTimeout(t);
   }, [load]);
 
-  const loadRef = useRef(load);
-  loadRef.current = load;
+  const refresh = useEffectEvent(() => load(true));
   useEffect(() => {
-    const h = () => loadRef.current(true);
+    const h = () => refresh();
     window.addEventListener(BOOKING_CHANGED, h);
     return () => window.removeEventListener(BOOKING_CHANGED, h);
   }, []);
 
   const slots = avail?.slots ?? [];
-  const slot = slots.find((s) => s.time === time) ?? null;
-
-  useEffect(() => {
-    if (!avail) return;
-    const s = avail.slots.find((x) => x.time === time);
-    if (!s || !s.available) {
+  // Skeletons while there is nothing current to show: first load, a date/party change
+  // (including the short debounce before the request) and retries after an error.
+  // Silent refreshes keep the current slots on screen.
+  const pending = avail ? availFor !== `${date}|${party}` : loading;
+  const [checked, setChecked] = useState(avail);
+  if (avail !== checked) {
+    setChecked(avail);
+    const s = avail?.slots.find((x) => x.time === time);
+    if (avail && (!s || !s.available)) {
       setTime(null);
       setTableId(null);
-    } else if (!s.available_tables.some((t) => t.id === tableId)) {
+    } else if (s && !s.available_tables.some((t) => t.id === tableId)) {
       setTableId(s.best_table?.id ?? s.available_tables[0]?.id ?? null);
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [avail]);
+  }
+  const slot = slots.find((s) => s.time === time) ?? null;
 
   const pickTime = (t: string) => {
     setTime(t);
@@ -301,18 +377,30 @@ export default function BookingPanel() {
     setSubmitting(true);
     setSubmitError(null);
     try {
-      const b = await createBooking({
+      const b = await createBooking(slug, {
         guest_name: form.name.trim(),
         party_size: party,
         start_time: slot.start || `${date}T${slot.time}:00`,
         phone: form.phone.trim() || undefined,
         email: form.email.trim() || undefined,
-        notes: form.notes.trim() || undefined,
+        allergies,
+        dietary,
+        occasion,
+        special_requests: form.requests.trim().slice(0, 500) || undefined,
         table_id: table?.id,
+        source,
       });
-      setBooking(b);
+      setBooking({
+        ...b,
+        restaurant_name: b.restaurant_name ?? restaurantName,
+        restaurant_slug: b.restaurant_slug ?? slug,
+        allergies: b.allergies ?? allergies,
+        dietary: b.dietary ?? dietary,
+        occasion: b.occasion ?? occasion,
+        special_requests: b.special_requests !== undefined ? b.special_requests : form.requests.trim() || null,
+      });
       celebrate();
-      notifyBookingsChanged();
+      notifyBookingsChanged(b);
     } catch (err) {
       setSubmitError(errorMessage(err));
       if (err instanceof ApiError && err.status === 409) load(true);
@@ -326,36 +414,41 @@ export default function BookingPanel() {
     setTime(null);
     setTableId(null);
     setTouched(false);
-    setForm((f) => ({ ...f, notes: '' }));
+    setForm((f) => ({ ...f, requests: '' }));
+    setAllergies([]);
+    setDietary('none');
+    setOccasion('none');
   };
 
   return (
-    <section id="reserve" className="relative mx-auto max-w-6xl scroll-mt-24 px-4 py-24 sm:px-6">
-      <motion.div initial={{ opacity: 0, y: 30 }} whileInView={{ opacity: 1, y: 0 }} viewport={{ once: true, margin: '-80px' }} transition={{ duration: 0.8 }} className="mb-10 text-center">
-        <p className="text-xs font-semibold uppercase tracking-[0.35em] text-ember">Reservations</p>
-        <h2 className="mt-3 font-wonk text-4xl sm:text-6xl">
+    <section id="reserve" className={`relative mx-auto max-w-6xl scroll-mt-24 px-4 sm:px-6 ${compact ? 'py-8 sm:py-10' : 'py-16 sm:py-24'}`}>
+      <motion.div initial={{ opacity: 0, y: 30 }} whileInView={{ opacity: 1, y: 0 }} viewport={{ once: true, margin: '-80px' }} transition={{ duration: 0.8 }} className={compact ? 'mb-6 text-center' : 'mb-10 text-center'}>
+        <p className="text-xs font-semibold uppercase tracking-[0.35em] text-ember">Reservations · {restaurantName}</p>
+        <h2 className={`mt-3 text-balance font-wonk leading-[1.08] ${compact ? 'text-3xl sm:text-4xl' : 'text-[2.5rem] sm:text-6xl'}`}>
           Reserve your <em className="text-ember-gradient pr-1">evening</em>
         </h2>
-        <p className="mx-auto mt-4 max-w-xl text-muted">Choose a night, tell us how many, and pick the seating that suits the mood.</p>
+        {!compact && <p className="mx-auto mt-4 max-w-xl text-pretty text-[15px] text-muted sm:text-base">Choose a night, tell us how many, and pick the seating that suits the mood.</p>}
       </motion.div>
 
-      <motion.div initial={{ opacity: 0, y: 40 }} whileInView={{ opacity: 1, y: 0 }} viewport={{ once: true, margin: '-60px' }} transition={{ duration: 0.9 }} className="glass rounded-[28px] p-5 sm:p-8 lg:p-10">
+      <motion.div initial={{ opacity: 0, y: 40 }} whileInView={{ opacity: 1, y: 0 }} viewport={{ once: true, margin: '-60px' }} transition={{ duration: 0.9 }} className="glass rounded-3xl p-4 sm:rounded-[28px] sm:p-8 lg:p-10">
         <Step n="01" title="Choose a night" aside={formatDay(date)}>
-          <div className="-mx-5 sm:-mx-8 lg:-mx-10">
+          <div className="-mx-4 sm:-mx-8 lg:-mx-10">
             <DateStrip days={days} value={date} onChange={setDate} />
           </div>
         </Step>
 
-        <div className="mt-10 grid gap-10 lg:grid-cols-[320px_minmax(0,1fr)]">
+        <div className="mt-8 grid gap-9 sm:mt-10 sm:gap-10 lg:grid-cols-[320px_minmax(0,1fr)]">
           <Step n="02" title="Party size">
             <PartyDial value={party} onChange={setParty} />
           </Step>
-          <div className="space-y-10">
+          <div className="min-w-0 space-y-9 sm:space-y-10">
             <Step n="03" title="Time">
-              <TimeSlots slots={slots} loading={loading} error={availError} value={time} onChange={pickTime} onRetry={() => load(false)} animKey={`${date}-${party}`} />
+              <TimeSlots slots={slots} pending={pending} loading={loading} error={availError} value={time} onChange={pickTime} onRetry={() => load(false)} animKey={`${date}-${party}`} />
             </Step>
-            <Step n="04" title="Your table" aside={slot ? `${slot.available_tables.length} free at ${slot.time}` : undefined}>
-              {!slot ? (
+            <Step n="04" title="Your table" aside={slot && !pending ? `${slot.available_tables.length} free at ${slot.time}` : undefined}>
+              {pending ? (
+                <TableSkeletons />
+              ) : !slot ? (
                 <p className="text-sm text-muted">Pick a time to see which tables are free.</p>
               ) : (
                 <div className="flex flex-wrap gap-2">
@@ -368,13 +461,13 @@ export default function BookingPanel() {
                         layout
                         onClick={() => setTableId(t.id)}
                         aria-pressed={sel}
-                        className={`relative rounded-2xl border px-4 py-2.5 text-left text-sm transition ${sel ? 'border-ember bg-ember/15 shadow-[0_0_30px_-8px_var(--ember)]' : 'border-line bg-glass hover:border-ember/50'}`}
+                        className={`relative min-h-11 max-w-full touch-manipulation rounded-2xl border px-4 py-2.5 text-left text-sm transition ${sel ? 'border-ember bg-ember/15 shadow-[0_0_30px_-8px_var(--ember)]' : 'border-line bg-glass hover:border-ember/50'}`}
                       >
                         <span className="font-display text-lg">{t.name}</span>
                         <span className="ml-2 text-xs text-muted">
                           {zoneLabel(t.zone)} · {t.capacity} seats
                         </span>
-                        {slot.best_table?.id === t.id && <span className="ml-2 text-[10px] uppercase tracking-widest text-gold">best</span>}
+                        {slot.best_table?.id === t.id && <span className="ml-2 text-[11px] uppercase tracking-widest text-gold sm:text-[10px]">best</span>}
                       </motion.button>
                     );
                   })}
@@ -384,57 +477,126 @@ export default function BookingPanel() {
           </div>
         </div>
 
-        <div className="mt-10 border-t border-line pt-10">
+        <div className="mt-8 border-t border-line pt-8 sm:mt-10 sm:pt-10">
           <AnimatePresence mode="wait">
             {booking ? (
-              <motion.div key="ticket" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="flex flex-col items-center gap-6">
+              <motion.div key="ticket" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="flex w-full flex-col items-center gap-6">
                 <Ticket booking={booking} />
-                <button type="button" onClick={reset} className="glass-soft rounded-full px-5 py-2.5 text-sm text-fg hover:text-ember">
-                  Book another table
-                </button>
+                <div className="flex flex-wrap justify-center gap-2">
+                  <Link to={`/bookings/${encodeURIComponent(booking.code)}`} className="glass-soft inline-flex min-h-11 touch-manipulation items-center rounded-full px-5 py-2.5 text-sm text-fg hover:text-ember">
+                    Manage booking
+                  </Link>
+                  <button type="button" onClick={reset} className="glass-soft min-h-11 touch-manipulation rounded-full px-5 py-2.5 text-sm text-fg hover:text-ember">
+                    Book another table
+                  </button>
+                </div>
               </motion.div>
             ) : (
               <motion.form key="form" onSubmit={submit} initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0, y: -10 }} noValidate>
-                <Step n="05" title="Your details">
-                  <div className="grid gap-8 md:grid-cols-[minmax(0,1fr)_300px]">
-                    <div className="grid gap-4 sm:grid-cols-2">
+                <Step n="05" title="Preferences" aside="Optional">
+                  <div className="grid grid-cols-1 gap-6 md:grid-cols-2">
+                    <fieldset className="min-w-0 md:col-span-2">
+                      <legend className="mb-2 block text-[13px] text-muted sm:text-xs">Allergies (select all that apply)</legend>
+                      <div className="flex flex-wrap gap-2">
+                        {ALLERGIES.map((a) => {
+                          const on = allergies.includes(a);
+                          return (
+                            <button
+                              key={a}
+                              type="button"
+                              aria-pressed={on}
+                              onClick={() => toggleAllergy(a)}
+                              className={`min-h-10 touch-manipulation rounded-full border px-4 py-1.5 text-sm transition ${on ? 'font-semibold' : 'border-line bg-glass text-fg hover:border-line-strong'}`}
+                              style={on ? { color: 'var(--allergy)', borderColor: 'color-mix(in oklab, var(--allergy) 60%, transparent)', background: 'color-mix(in oklab, var(--allergy) 14%, transparent)' } : undefined}
+                            >
+                              {allergyLabel(a)}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </fieldset>
+                    <fieldset className="min-w-0">
+                      <legend className="mb-2 block text-[13px] text-muted sm:text-xs">Dietary</legend>
+                      <div className="flex flex-wrap gap-2" role="radiogroup">
+                        {DIETARY.map((d) => {
+                          const on = dietary === d.value;
+                          return (
+                            <button
+                              key={d.value}
+                              type="button"
+                              role="radio"
+                              aria-checked={on}
+                              onClick={() => setDietary(d.value)}
+                              className={`min-h-10 touch-manipulation rounded-full border px-4 py-1.5 text-sm transition ${on ? 'font-semibold' : 'border-line bg-glass text-fg hover:border-line-strong'}`}
+                              style={on ? { color: 'var(--diet)', borderColor: 'color-mix(in oklab, var(--diet) 60%, transparent)', background: 'color-mix(in oklab, var(--diet) 14%, transparent)' } : undefined}
+                            >
+                              {d.label}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </fieldset>
+                    <label className="block min-w-0">
+                      <span className="mb-2 flex items-center gap-1.5 text-[13px] text-muted sm:text-xs">
+                        <OccasionIcon occasion={occasion} className="h-3.5 w-3.5" /> Occasion
+                      </span>
+                      <select className="field text-base [&>option]:bg-[var(--bg-elev)]" value={occasion} onChange={(e) => setOccasion(e.target.value as Occasion)}>
+                        {OCCASIONS.map((o) => (
+                          <option key={o.value} value={o.value}>
+                            {o.label}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                    <label className="block min-w-0 md:col-span-2">
+                      <span className="mb-1.5 flex justify-between text-[13px] text-muted sm:text-xs">
+                        <span>Special requests</span>
+                        <span className="text-faint">{form.requests.length}/500</span>
+                      </span>
+                      <textarea className="field min-h-24 resize-y text-base" maxLength={500} value={form.requests} onChange={(e) => setForm({ ...form, requests: e.target.value })} placeholder="High chair, quiet corner, a candle on the dessert…" />
+                    </label>
+                  </div>
+                </Step>
+                <div className="mt-8 sm:mt-10" />
+                <Step n="06" title="Your details">
+                  <div className="grid grid-cols-1 gap-6 sm:gap-8 md:grid-cols-[minmax(0,1fr)_300px]">
+                    <div className="grid min-w-0 grid-cols-1 gap-4 sm:grid-cols-2">
                       <label className="block sm:col-span-2">
-                        <span className="mb-1.5 block text-xs text-muted">Name *</span>
-                        <input className="field" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} placeholder="Ana Ruiz" autoComplete="name" aria-invalid={touched && nameMissing} />
-                        {touched && nameMissing && <span className="mt-1 block text-xs text-danger">Please tell us who the table is for.</span>}
+                        <span className="mb-1.5 block text-[13px] text-muted sm:text-xs">Name *</span>
+                        <input className="field text-base" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} placeholder="Ananya Rao" autoComplete="name" aria-invalid={touched && nameMissing} />
+                        {touched && nameMissing && <span className="mt-1 block text-[13px] text-danger sm:text-xs">Please tell us who the table is for.</span>}
                       </label>
                       <label className="block">
-                        <span className="mb-1.5 block text-xs text-muted">Phone</span>
-                        <input className="field" type="tel" value={form.phone} onChange={(e) => setForm({ ...form, phone: e.target.value })} placeholder="+1 555 0100" autoComplete="tel" />
+                        <span className="mb-1.5 block text-[13px] text-muted sm:text-xs">Phone</span>
+                        <input className="field text-base" type="tel" value={form.phone} onChange={(e) => setForm({ ...form, phone: e.target.value })} placeholder="+91 98200 12345" autoComplete="tel" inputMode="tel" />
                       </label>
                       <label className="block">
-                        <span className="mb-1.5 block text-xs text-muted">Email</span>
-                        <input className="field" type="email" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} placeholder="ana@example.com" autoComplete="email" />
-                      </label>
-                      <label className="block sm:col-span-2">
-                        <span className="mb-1.5 block text-xs text-muted">Notes</span>
-                        <textarea className="field min-h-24 resize-y" value={form.notes} onChange={(e) => setForm({ ...form, notes: e.target.value })} placeholder="Allergies, celebrations, seating wishes…" />
+                        <span className="mb-1.5 block text-[13px] text-muted sm:text-xs">Email</span>
+                        <input className="field text-base" type="email" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} placeholder="ananya@example.com" autoComplete="email" inputMode="email" autoCapitalize="off" spellCheck={false} />
                       </label>
                     </div>
-                    <div className="glass-soft flex flex-col rounded-3xl p-5">
-                      <p className="text-[10px] font-semibold uppercase tracking-[0.28em] text-faint">Your evening</p>
+                    <div className="glass-soft flex min-w-0 flex-col rounded-3xl p-4 sm:p-5">
+                      <p className="text-[11px] font-semibold uppercase tracking-[0.28em] text-faint sm:text-[10px]">Your evening</p>
                       <dl className="mt-4 space-y-2.5 text-sm">
                         {[
                           ['Date', formatDay(date)],
                           ['Time', time ?? '—'],
                           ['Guests', String(party)],
                           ['Table', table ? `${table.name} · ${zoneLabel(table.zone)}` : '—'],
+                          ...(allergies.length ? [['Allergies', allergies.map(allergyLabel).join(', ')]] : []),
+                          ...(dietary !== 'none' ? [['Dietary', DIETARY.find((d) => d.value === dietary)?.label ?? dietary]] : []),
+                          ...(occasion !== 'none' ? [['Occasion', OCCASIONS.find((o) => o.value === occasion)?.label ?? occasion]] : []),
                         ].map(([k, v]) => (
                           <div key={k} className="flex justify-between gap-3">
                             <dt className="text-muted">{k}</dt>
-                            <dd className="font-medium">{v}</dd>
+                            <dd className="min-w-0 break-words text-right font-medium">{v}</dd>
                           </div>
                         ))}
                       </dl>
                       <AnimatePresence>
                         {submitError && (
                           <motion.div initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: 'auto' }} exit={{ opacity: 0, height: 0 }} className="overflow-hidden">
-                            <div className="mt-4 flex gap-2 rounded-2xl border border-danger/30 bg-danger/10 p-3 text-xs text-fg">
+                            <div className="mt-4 flex gap-2 rounded-2xl border border-danger/30 bg-danger/10 p-3 text-[13px] text-fg sm:text-xs">
                               <CircleAlert className="h-4 w-4 shrink-0 text-danger" /> {submitError}
                             </div>
                           </motion.div>
@@ -443,7 +605,7 @@ export default function BookingPanel() {
                       <button
                         type="submit"
                         disabled={submitting || !slot}
-                        className="group ember-fill relative mt-auto inline-flex w-full items-center justify-center gap-2 overflow-hidden rounded-full px-6 py-3.5 text-sm font-semibold text-on-ember shadow-[0_0_40px_-8px_var(--ember)] transition disabled:cursor-not-allowed disabled:opacity-40 [&:not(:first-child)]:mt-5"
+                        className="group ember-fill relative mt-auto inline-flex min-h-12 w-full touch-manipulation items-center justify-center gap-2 overflow-hidden rounded-full px-6 py-3.5 text-sm font-semibold text-on-ember shadow-[0_0_40px_-8px_var(--ember)] transition disabled:cursor-not-allowed disabled:opacity-40 [&:not(:first-child)]:mt-5"
                       >
                         <span className="sheen" />
                         {submitting ? <LoaderCircle className="h-4 w-4 animate-spin" /> : null}

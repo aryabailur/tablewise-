@@ -1,9 +1,9 @@
 import { useEffect, useState } from 'react';
 import { motion } from 'framer-motion';
-import { CalendarDays, LayoutDashboard, Sparkles, UtensilsCrossed } from 'lucide-react';
+import { Link, useLocation } from 'react-router-dom';
+import { Compass, LayoutDashboard, Sparkles, Ticket } from 'lucide-react';
 import ThemeToggle from './ThemeToggle';
-
-export type View = 'guest' | 'admin';
+import { lastBooking } from '../lib/api';
 
 function Logo() {
   return (
@@ -22,7 +22,20 @@ function Logo() {
   );
 }
 
-export default function Nav({ view, onViewChange, onReserve, onConcierge }: { view: View; onViewChange: (v: View) => void; onReserve: () => void; onConcierge: () => void }) {
+const TABS = [
+  { id: 'discover', label: 'Discover', icon: Compass },
+  { id: 'booking', label: 'My booking', icon: Ticket },
+  { id: 'admin', label: 'Admin', icon: LayoutDashboard },
+] as const;
+
+function activeTab(path: string): string {
+  if (path.startsWith('/admin')) return 'admin';
+  if (path.startsWith('/bookings')) return 'booking';
+  return 'discover';
+}
+
+export default function Nav({ onConcierge }: { onConcierge: () => void }) {
+  const { pathname } = useLocation();
   const [scrolled, setScrolled] = useState(false);
   useEffect(() => {
     const on = () => setScrolled(window.scrollY > 24);
@@ -30,46 +43,42 @@ export default function Nav({ view, onViewChange, onReserve, onConcierge }: { vi
     window.addEventListener('scroll', on, { passive: true });
     return () => window.removeEventListener('scroll', on);
   }, []);
-  const link = 'hidden items-center gap-1.5 rounded-full px-3 py-1.5 text-sm text-muted transition hover:text-fg md:inline-flex';
+  const active = activeTab(pathname);
+  const hrefFor = (id: string) => {
+    if (id === 'admin') return '/admin';
+    if (id === 'booking') {
+      const last = lastBooking();
+      return last?.code ? `/bookings/${encodeURIComponent(last.code)}` : '/bookings';
+    }
+    return '/';
+  };
   return (
     <motion.header initial={{ y: -40, opacity: 0 }} animate={{ y: 0, opacity: 1 }} transition={{ duration: 0.7 }} className="fixed inset-x-0 top-0 z-40 px-3 pt-3 sm:px-6 sm:pt-4">
-      <nav className={`mx-auto flex max-w-6xl items-center justify-between gap-2 rounded-full px-3 py-2 transition-all duration-500 sm:px-4 ${scrolled ? 'glass-strong' : 'border border-transparent'}`}>
-        <a
-          href="#top"
-          onClick={(e) => {
-            e.preventDefault();
-            onViewChange('guest');
-            window.scrollTo({ top: 0, behavior: 'smooth' });
-          }}
-          className="flex items-center gap-2.5"
-        >
+      <nav aria-label="Main" className={`mx-auto flex max-w-6xl items-center justify-between gap-2 rounded-full px-3 py-2 transition-all duration-500 sm:px-4 ${scrolled ? 'glass-strong' : 'border border-transparent'}`}>
+        <Link to="/" className="flex shrink-0 items-center gap-2.5" aria-label="Tablewise home">
           <Logo />
-          <span className="font-wonk text-lg leading-none">Ember &amp; Vine</span>
-          <span className="hidden font-mono text-[10px] uppercase tracking-[0.2em] text-faint lg:inline">Tablewise</span>
-        </a>
+          <span className="hidden font-wonk text-lg leading-none sm:inline">Tablewise</span>
+          <span className="hidden font-mono text-[10px] uppercase tracking-[0.2em] text-faint lg:inline">Mumbai</span>
+        </Link>
         <div className="flex items-center gap-1 sm:gap-2">
-          <button type="button" onClick={onReserve} className={link}>
-            <CalendarDays className="h-4 w-4" /> Reserve
-          </button>
-          <button type="button" onClick={onConcierge} className={link}>
+          <button type="button" onClick={onConcierge} className="hidden items-center gap-1.5 rounded-full px-3 py-1.5 text-sm text-muted transition hover:text-fg md:inline-flex">
             <Sparkles className="h-4 w-4" /> Concierge
           </button>
-          <div role="tablist" aria-label="View" className="relative flex rounded-full border border-line bg-glass p-1">
-            {(['guest', 'admin'] as const).map((v) => (
-              <button
-                key={v}
-                type="button"
-                role="tab"
-                aria-selected={view === v}
-                onClick={() => onViewChange(v)}
-                className={`relative rounded-full px-3 py-1.5 text-xs font-medium transition-colors ${view === v ? 'text-on-ember' : 'text-muted hover:text-fg'}`}
+          <div className="relative flex rounded-full border border-line bg-glass p-1">
+            {TABS.map(({ id, label, icon: Icon }) => (
+              <Link
+                key={id}
+                to={hrefFor(id)}
+                aria-current={active === id ? 'page' : undefined}
+                aria-label={label}
+                className={`relative rounded-full px-2.5 py-1.5 text-xs font-medium transition-colors sm:px-3 ${active === id ? 'text-on-ember' : 'text-muted hover:text-fg'}`}
               >
-                {view === v && <motion.span layoutId="view-pill" className="ember-fill absolute inset-0 rounded-full shadow-[0_0_20px_-4px_var(--ember)]" transition={{ type: 'spring', stiffness: 400, damping: 32 }} />}
+                {active === id && <motion.span layoutId="view-pill" className="ember-fill absolute inset-0 rounded-full shadow-[0_0_20px_-4px_var(--ember)]" transition={{ type: 'spring', stiffness: 400, damping: 32 }} />}
                 <span className="relative flex items-center gap-1.5">
-                  {v === 'guest' ? <UtensilsCrossed className="h-3.5 w-3.5" /> : <LayoutDashboard className="h-3.5 w-3.5" />}
-                  {v === 'guest' ? 'Guest' : 'Admin'}
+                  <Icon className="h-3.5 w-3.5" />
+                  <span className={active === id ? 'inline' : 'hidden sm:inline'}>{label}</span>
                 </span>
-              </button>
+              </Link>
             ))}
           </div>
           <ThemeToggle />

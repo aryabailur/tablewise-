@@ -1,7 +1,8 @@
-"""Ember & Vine MCP server (stdio). Exposes booking + knowledge tools to Claude Desktop / Claude Code.
+"""Tablewise MCP server (stdio). Exposes restaurant search, booking and knowledge tools to Claude Desktop / Code.
 
 Run:  python mcp_server.py   (from /backend, using the backend venv)
 Reuses booking_service and rag directly - no HTTP hop. Never print to stdout (it carries the MCP protocol).
+Bookings made here are recorded with source="mcp".
 """
 from __future__ import annotations
 
@@ -18,18 +19,17 @@ try:  # mcp 1.x
 except ImportError:  # mcp 2.x renamed FastMCP -> MCPServer
     from mcp.server.mcpserver import MCPServer as FastMCP
 
+from app import allergens, rag
 from app import booking_service as bs
-from app import rag
-from app.db import init_db
-from app.seed import seed_tables
+from app.seed import ensure_seeded
 
-init_db()
-seed_tables()
+ensure_seeded()
 
-mcp = FastMCP("ember-and-vine")
+mcp = FastMCP("tablewise")
+DEFAULT = bs.DEFAULT_RESTAURANT
 
 
-def _safe(fn, *args, **kwargs) -> dict[str, Any]:
+def _safe(fn, *args, **kwargs) -> Any:
     try:
         return fn(*args, **kwargs)
     except bs.BookingError as e:
@@ -37,21 +37,34 @@ def _safe(fn, *args, **kwargs) -> dict[str, Any]:
 
 
 @mcp.tool()
-def search_restaurant_info(query: str, k: int = 4) -> list[dict[str, Any]]:
-    """Search Ember & Vine's knowledge base (menu, allergens, policies, hours, parking, events, FAQ).
-    Returns the most relevant passages with their source file and section."""
-    return rag.retrieve(query, k=max(1, min(k, 8)))
+def search_restaurants(cuisine: str | None = None, area: str | None = None, price_level: int | None = None,
+                       tags: list[str] | None = None, party_size: int | None = None, date: str | None = None,
+                       time: str | None = None) -> Any:
+    """Find Tablewise restaurants in Mumbai with their next 3 open slots. All filters optional:
+    cuisine (Italian, Japanese, Seafood, North Indian, Thali...), area (Lower Parel, Bandra, Powai, Juhu, Colaba,
+    Andheri), price_level 1-4, tags (rooftop, bar, live-music, pet-friendly, pure-veg), party_size,
+    date YYYY-MM-DD (default today), time HH:MM (default now)."""
+    return _safe(bs.search_restaurants, cuisine=cuisine, area=area, price_level=price_level, tags=tags,
+                 party_size=party_size, date=date, time=time)
 
 
 @mcp.tool()
-def check_availability(date: str, party_size: int, time: str | None = None, zone: str | None = None) -> dict:
-    """Check free tables. date: YYYY-MM-DD; party_size 1-12; time: optional HH:MM (24h);
-    zone: optional window|garden|bar|private. Seatings every 30 min, 17:00-22:00."""
-    r = _safe(bs.check_availability, date, party_size, time, zone)
+def search_restaurant_info(query: str, k: int = 4, restaurant_slug: str | None = None) -> list[dict[str, Any]]:
+    """Search the restaurants' knowledge base (about, menu, allergens, policies) plus the Tablewise FAQ.
+    restaurant_slug (e.g. ember-vine, trattoria-alba) restricts the search to one restaurant."""
+    return rag.retrieve(query, k=max(1, min(k, 8)), restaurant_slug=restaurant_slug)
+
+
+@mcp.tool()
+def check_availability(date: str, party_size: int, time: str | None = None, zone: str | None = None,
+                       restaurant_slug: str = DEFAULT) -> dict:
+    """Check free tables at a restaurant. date: YYYY-MM-DD; party_size 1-12; time: optional HH:MM (24h);
+    zone: optional window|garden|bar|private|rooftop|patio. restaurant_slug defaults to ember-vine."""
+    r = _safe(bs.check_availability, restaurant_slug, date, party_size, time, zone)
     if "error" in r:
         return r
-    out = {"date": r["date"], "party_size": r["party_size"], "zone": r["zone"],
-           "available_times": [s["time"] for s in r["slots"] if s["available"]]}
+    out = {"restaurant_slug": r["restaurant_slug"], "date": r["date"], "party_size": r["party_size"],
+           "zone": r["zone"], "available_times": [s["time"] for s in r["slots"] if s["available"]]}
     for k in ("requested_time", "requested_available", "nearest_alternatives", "suggested_table"):
         if k in r:
             out[k] = r[k]
@@ -60,30 +73,41 @@ def check_availability(date: str, party_size: int, time: str | None = None, zone
 
 @mcp.tool()
 def create_booking(guest_name: str, party_size: int, date: str, time: str, phone: str | None = None,
-                   email: str | None = None, zone: str | None = None, notes: str | None = None) -> dict:
+                   email: str | None = None, zone: str | None = None, notes: str | None = None,
+                   restaurant_slug: str = DEFAULT, allergies: list[str] | None = None, dietary: str | None = None,
+                   occasion: str | None = None, special_requests: str | None = None) -> dict:
     """Create a reservation (confirm details with the guest first). date YYYY-MM-DD, time HH:MM (24h).
-    Returns the booking including its code (EV-XXXX)."""
+    allergies: any of nuts, peanuts, gluten, dairy, shellfish, fish, eggs, soy, sesame.
+    dietary: veg|vegan|jain|halal|none. occasion: birthday|anniversary|business|date|none.
+    special_requests: free text (max 500). Returns the booking including its code (e.g. EMB-7K2P) and, when
+    allergies are given, allergy_check listing menu dishes to avoid. restaurant_slug defaults to ember-vine."""
     try:
         start = bs.combine(date, time)
     except bs.BookingError as e:
         return {"error": e.message}
-    return _safe(bs.create_booking, guest_name=guest_name, party_size=party_size, start_time=start,
-                 phone=phone, email=email, zone=zone, notes=notes)
+    return allergens.attach_allergy_check(_safe(
+        bs.create_booking, restaurant_slug, guest_name=guest_name, party_size=party_size, start_time=start,
+        phone=phone, email=email, zone=zone, notes=notes, source="mcp", allergies=allergies, dietary=dietary,
+        occasion=occasion, special_requests=special_requests))
 
 
 @mcp.tool()
-def get_booking(code: str) -> dict:
-    """Look up a booking by its code (EV-XXXX)."""
-    return _safe(bs.get_booking, code)
+def get_booking(code: str, restaurant_slug: str | None = None) -> dict:
+    """Look up a booking by its code (e.g. EMB-7K2P). restaurant_slug is optional (codes are globally unique)."""
+    return _safe(bs.get_booking, code, restaurant_slug)
 
 
 @mcp.tool()
-def modify_booking(code: str, date: str | None = None, time: str | None = None,
-                   party_size: int | None = None, zone: str | None = None, notes: str | None = None) -> dict:
-    """Modify a booking. Omitted fields keep their current values. date YYYY-MM-DD, time HH:MM (24h)."""
+def modify_booking(code: str, date: str | None = None, time: str | None = None, party_size: int | None = None,
+                   zone: str | None = None, notes: str | None = None, restaurant_slug: str | None = None,
+                   allergies: list[str] | None = None, dietary: str | None = None, occasion: str | None = None,
+                   special_requests: str | None = None, status: str | None = None) -> dict:
+    """Modify a booking. Omitted fields keep their current values. date YYYY-MM-DD, time HH:MM (24h).
+    allergies (replaces the list; [] clears), dietary, occasion and special_requests as in create_booking.
+    status: confirmed|seated|completed|no_show|cancelled (cancelled bookings can't be changed)."""
     start = None
     if date or time:
-        current = _safe(bs.get_booking, code)
+        current = _safe(bs.get_booking, code, restaurant_slug)
         if "error" in current:
             return current
         d, t = current["start_time"].split("T")
@@ -91,13 +115,16 @@ def modify_booking(code: str, date: str | None = None, time: str | None = None,
             start = bs.combine(date or d, time or t[:5])
         except bs.BookingError as e:
             return {"error": e.message}
-    return _safe(bs.modify_booking, code, start_time=start, party_size=party_size, zone=zone, notes=notes)
+    return allergens.attach_allergy_check(_safe(
+        bs.modify_booking, code, start_time=start, party_size=party_size, zone=zone, notes=notes,
+        restaurant_slug=restaurant_slug, allergies=allergies, dietary=dietary, occasion=occasion,
+        special_requests=special_requests, status=status))
 
 
 @mcp.tool()
-def cancel_booking(code: str) -> dict:
-    """Cancel a booking by its code (EV-XXXX)."""
-    return _safe(bs.cancel_booking, code)
+def cancel_booking(code: str, restaurant_slug: str | None = None) -> dict:
+    """Cancel a booking by its code (e.g. EMB-7K2P)."""
+    return _safe(bs.cancel_booking, code, restaurant_slug)
 
 
 if __name__ == "__main__":

@@ -56,6 +56,16 @@
   --z-garden: #8fbf94;
   --z-bar: #ff9a5c;
   --z-private: #d77aa0;
+  --z-rooftop: #7fb4e8;
+  --z-patio: #c9a0f0;
+
+  --st-confirmed: #7fb4e8;
+  --st-seated: #6fd08c;
+  --st-completed: #c9a0f0;
+  --st-no_show: #f5b14c;
+  --st-cancelled: #ff6b7d;
+  --allergy: #ff6b7d;
+  --diet: #6fd08c;
 
   --shadow-card: 0 30px 80px -30px rgb(0 0 0 / 0.85);
   --inner-glow: inset 0 1px 0 0 rgb(255 255 255 / 0.07), inset 0 0 0 1px rgb(255 255 255 / 0.015),
@@ -112,6 +122,16 @@
   --z-garden: #4f8a5b;
   --z-bar: #c8541f;
   --z-private: #9b3463;
+  --z-rooftop: #2f6fa8;
+  --z-patio: #6f4aa8;
+
+  --st-confirmed: #2f6fa8;
+  --st-seated: #2e7d46;
+  --st-completed: #6f4aa8;
+  --st-no_show: #a8620a;
+  --st-cancelled: #c2334a;
+  --allergy: #c2334a;
+  --diet: #2e7d46;
 
   --shadow-card: 0 30px 70px -35px rgb(110 50 20 / 0.35);
   --inner-glow: inset 0 1px 0 0 rgb(255 255 255 / 0.85), inset 0 -60px 90px -60px rgb(224 88 42 / 0.1);
@@ -477,6 +497,53 @@
   animation: skeleton 1.6s linear infinite;
 }
 
+/* Loading placeholders shaped like real chips: a glass shell with a warm highlight sweeping across. */
+.shimmer {
+  position: relative;
+  overflow: hidden;
+  isolation: isolate;
+  border: 1px solid var(--line);
+  background: var(--glass);
+}
+.shimmer::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  pointer-events: none;
+  background: linear-gradient(
+    100deg,
+    transparent 15%,
+    color-mix(in oklab, var(--gold) 12%, transparent) 38%,
+    color-mix(in oklab, var(--fg) 13%, transparent) 50%,
+    color-mix(in oklab, var(--ember) 10%, transparent) 62%,
+    transparent 85%
+  );
+  transform: translateX(-100%);
+  animation: shimmer-sweep 1.7s cubic-bezier(0.45, 0, 0.25, 1) infinite;
+  animation-delay: var(--shimmer-delay, 0s);
+}
+.shimmer-bar {
+  display: block;
+  border-radius: 999px;
+  background: color-mix(in oklab, var(--fg) 9%, transparent);
+}
+
+@keyframes shimmer-sweep {
+  to {
+    transform: translateX(100%);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  /* No sweep: a still, soft glaze so the placeholders still read as "loading". */
+  .shimmer::after {
+    animation: none;
+    transform: none;
+    opacity: 0.45;
+  }
+}
+
 .sheen {
   position: absolute;
   inset: 0;
@@ -669,4 +736,73 @@
     animation-iteration-count: 1 !important;
     transition-duration: 0.001ms !important;
   }
+}
+
+/* Restaurant docs (About / Menu / Policies markdown) */
+.prose-doc {
+  overflow-wrap: anywhere;
+  line-height: 1.7;
+  color: var(--fg-muted);
+}
+.prose-doc > * + * {
+  margin-top: 0.85em;
+}
+.prose-doc h1,
+.prose-doc h2,
+.prose-doc h3 {
+  font-family: var(--font-display);
+  color: var(--fg);
+  line-height: 1.2;
+}
+.prose-doc h1 {
+  font-size: 1.9rem;
+}
+.prose-doc h2 {
+  margin-top: 1.4em;
+  font-size: 1.45rem;
+}
+.prose-doc h3 {
+  margin-top: 1.2em;
+  font-size: 1.15rem;
+  color: var(--gold);
+}
+.prose-doc ul {
+  list-style: disc;
+  padding-left: 1.2em;
+}
+.prose-doc ol {
+  list-style: decimal;
+  padding-left: 1.3em;
+}
+.prose-doc li + li {
+  margin-top: 0.3em;
+}
+.prose-doc li::marker {
+  color: var(--ember);
+}
+.prose-doc strong {
+  font-weight: 600;
+  color: var(--fg);
+}
+.prose-doc em {
+  font-style: italic;
+}
+.prose-doc a {
+  color: var(--ember);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+.prose-doc table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.9em;
+}
+.prose-doc th,
+.prose-doc td {
+  border-bottom: 1px solid var(--line);
+  padding: 0.45em 0.6em;
+  text-align: left;
+}
+.prose-doc hr {
+  border-color: var(--line);
 }
