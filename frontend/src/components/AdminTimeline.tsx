@@ -1,11 +1,13 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { motion } from 'framer-motion';
-import { ChevronLeft, ChevronRight, CircleAlert, Store, Users, X } from 'lucide-react';
-import type { Booking, Table } from '../lib/types';
-import { BOOKING_CHANGED, cancelBooking, errorMessage, getTables, lastBooking, listBookings, notifyBookingsChanged } from '../lib/api';
+import { ChevronLeft, ChevronRight, CircleAlert, Store, Users } from 'lucide-react';
+import type { Booking, BookingStatus, Table } from '../lib/types';
+import { BOOKING_CHANGED, cancelBooking, errorMessage, getTables, lastBooking, listBookings, notifyBookingsChanged, updateBooking } from '../lib/api';
 import { formatDay, parseISODate, parseLocal, toISODate } from '../lib/time';
 import { ZONE_ORDER, zoneColor, zoneLabel } from '../lib/zones';
 import { useAllRestaurants } from '../lib/restaurants';
+import { STATUSES, STATUS_LABEL, hasAllergies, isCelebration, statusColor, statusOf } from '../lib/booking';
+import BookingDrawer from './BookingDrawer';
 
 const DEFAULT_SLUG = 'ember-vine';
 const toMin = (hm: string | undefined, fallback: number) => {
@@ -33,45 +35,53 @@ function initialSlug(): string {
   return q || lastBooking()?.restaurant_slug || DEFAULT_SLUG;
 }
 
-interface BarActions { highlight: string | null; confirm: string | null; busy: string | null; onCancel: (code: string) => void; onConfirm: (code: string) => void }
+interface BarActions { highlight: string | null; selected: string | null; onOpen: (code: string) => void }
 
 function Bar({ b, span, actions }: { b: Booking; span: Span; actions: BarActions }) {
   const st = mins(b.start_time);
   const en = endOf(b);
-  const cancelled = b.status === 'cancelled';
-  const color = zoneColor(b.zone);
-  const { highlight, confirm, busy, onCancel, onConfirm } = actions;
+  const status = statusOf(b);
+  const cancelled = status === 'cancelled';
+  const faded = cancelled || status === 'no_show';
+  const color = statusColor(status);
+  const { highlight, selected, onOpen } = actions;
+  const allergy = hasAllergies(b);
+  const party = isCelebration(b);
   return (
-    <motion.div
+    <motion.button
+      type="button"
+      onClick={() => onOpen(b.code)}
       initial={{ opacity: 0, scaleX: 0.6 }}
-      animate={{ opacity: cancelled ? 0.5 : 1, scaleX: 1 }}
-      title={`${b.guest_name} · ${b.party_size} guests · ${b.code}${b.source ? ` · via ${b.source}` : ''}${b.notes ? ` · ${b.notes}` : ''}`}
-      className={`group/bar absolute inset-y-1.5 flex items-center gap-2 overflow-hidden rounded-xl border px-2.5 text-xs ${cancelled ? 'bar-cancelled z-0 border-line line-through' : 'z-10'} ${highlight === b.code ? 'ring-2 ring-[var(--ember)] shadow-[0_0_18px_var(--ember)]' : ''}`}
+      animate={{ opacity: faded ? 0.6 : 1, scaleX: 1 }}
+      aria-label={`${b.guest_name}, ${b.party_size} guests, ${STATUS_LABEL[status]}, ${b.code}${allergy ? ', has allergies' : ''}. Open details`}
+      title={`${b.guest_name} · ${b.party_size} guests · ${b.code} · ${STATUS_LABEL[status]}${b.source ? ` · via ${b.source}` : ''}${allergy ? ` · allergies: ${b.allergies?.join(', ')}` : ''}`}
+      className={`absolute inset-y-1.5 flex cursor-pointer items-center gap-2 overflow-hidden rounded-xl border px-2.5 text-left text-xs text-fg outline-none transition-[filter] hover:brightness-125 focus-visible:ring-2 focus-visible:ring-[var(--ember)] ${cancelled ? 'bar-cancelled z-0 line-through' : 'z-10'} ${highlight === b.code || selected === b.code ? 'ring-2 ring-[var(--ember)] shadow-[0_0_18px_var(--ember)]' : ''}`}
       style={{
         left: pctIn(span, st),
         width: `calc(${pctIn(span, en)} - ${pctIn(span, st)})`,
         transformOrigin: 'left center',
-        ...(cancelled ? {} : { background: `linear-gradient(90deg, color-mix(in oklab, ${color} 38%, transparent), color-mix(in oklab, ${color} 14%, transparent))`, borderColor: `color-mix(in oklab, ${color} 55%, transparent)` }),
+        borderColor: `color-mix(in oklab, ${color} 60%, transparent)`,
+        ...(cancelled ? {} : { background: `linear-gradient(90deg, color-mix(in oklab, ${color} 34%, transparent), color-mix(in oklab, ${color} 12%, transparent))` }),
       }}
     >
-      <span className="truncate font-medium">{b.guest_name}</span>
-      <span className="flex shrink-0 items-center gap-0.5 text-muted">
+      <span className="h-2 w-2 shrink-0 rounded-full" style={{ background: color }} aria-hidden />
+      {allergy && (
+        <span className="shrink-0 text-sm leading-none" aria-hidden title="Allergies">
+          ⚠️
+        </span>
+      )}
+      {party && (
+        <span className="shrink-0 text-sm leading-none" aria-hidden title={b.occasion === 'birthday' ? 'Birthday' : 'Anniversary'}>
+          🎂
+        </span>
+      )}
+      <span className="truncate font-semibold">{b.guest_name}</span>
+      <span className="flex shrink-0 items-center gap-0.5 text-fg/80">
         <Users className="h-3 w-3" />
         {b.party_size}
       </span>
-      <span className="ml-auto shrink-0 font-mono text-[10px] text-faint">{b.code}</span>
-      {!cancelled && (
-        <button
-          type="button"
-          disabled={busy === b.code}
-          onClick={() => (confirm === b.code ? onCancel(b.code) : onConfirm(b.code))}
-          className={`shrink-0 rounded-full transition ${confirm === b.code ? 'bg-danger px-2 py-0.5 text-[10px] font-semibold text-white' : 'grid h-5 w-5 place-items-center bg-black/30 text-white opacity-0 group-hover/bar:opacity-100 focus:opacity-100'}`}
-          aria-label={`Cancel ${b.code}`}
-        >
-          {confirm === b.code ? 'Cancel?' : <X className="h-3 w-3" />}
-        </button>
-      )}
-    </motion.div>
+      <span className="ml-auto shrink-0 font-mono text-xs text-fg/85">{b.code}</span>
+    </motion.button>
   );
 }
 
@@ -79,8 +89,8 @@ function Row({ label, sub, items, span, cols, actions }: { label: string; sub?: 
   return (
     <div className="flex border-b border-line last:border-b-0">
       <div className="w-28 shrink-0 px-4 py-3">
-        <div className="font-display text-base leading-none">{label}</div>
-        {sub && <div className="mt-1 text-[10px] text-faint">{sub}</div>}
+        <div className="font-display text-base leading-none text-fg">{label}</div>
+        {sub && <div className="mt-1 text-xs text-fg/75">{sub}</div>}
       </div>
       <div className="relative h-14 flex-1" style={{ backgroundImage: 'linear-gradient(to right, var(--line) 1px, transparent 1px)', backgroundSize: `${100 / cols}% 100%` }}>
         {items.map((b) => (
@@ -102,8 +112,9 @@ export default function AdminTimeline() {
   const [actionError, setActionError] = useState<string | null>(null);
   const [nonce, setNonce] = useState(0);
   const [showCancelled, setShowCancelled] = useState(true);
-  const [confirm, setConfirm] = useState<string | null>(null);
-  const [busy, setBusy] = useState<string | null>(null);
+  const [selected, setSelected] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [drawerError, setDrawerError] = useState<string | null>(null);
 
   const restaurant = restaurants.find((r) => r.slug === slug) ?? null;
   const open = toMin(restaurant?.hours_open, 17 * 60);
@@ -193,27 +204,29 @@ export default function AdminTimeline() {
     const t = window.setTimeout(() => setHighlight(null), 8000);
     return () => window.clearTimeout(t);
   }, [highlight]);
-  useEffect(() => {
-    if (!confirm) return;
-    const t = window.setTimeout(() => setConfirm(null), 3500);
-    return () => window.clearTimeout(t);
-  }, [confirm]);
-
-  const cancel = async (code: string) => {
-    setBusy(code);
+  const applyUpdate = async (code: string, status: BookingStatus, call: () => Promise<Booking>) => {
+    setBusy(true);
+    setDrawerError(null);
     try {
-      const u = await cancelBooking(code);
-      setData((d) => ({ ...d, bookings: d.bookings.map((b): Booking => (b.code === code ? { ...b, ...u, status: 'cancelled' } : b)) }));
+      const u = await call();
+      const patch = u && typeof u === 'object' ? u : null;
+      setData((d) => ({ ...d, bookings: d.bookings.map((b): Booking => (b.code === code ? { ...b, ...patch, status: patch?.status ?? status } : b)) }));
       setActionError(null);
       notifyBookingsChanged();
     } catch (e) {
-      setActionError(errorMessage(e));
+      setDrawerError(errorMessage(e));
     } finally {
-      setBusy(null);
-      setConfirm(null);
+      setBusy(false);
     }
   };
-  const actions: BarActions = { highlight, confirm, busy, onCancel: cancel, onConfirm: setConfirm };
+  const setStatus = (code: string, status: BookingStatus) => applyUpdate(code, status, () => updateBooking(code, { status }));
+  const cancel = (code: string) => applyUpdate(code, 'cancelled', () => cancelBooking(code));
+  const openBooking = (code: string) => {
+    setDrawerError(null);
+    setSelected(code);
+  };
+  const closeDrawer = useCallback(() => setSelected(null), []);
+  const actions: BarActions = { highlight, selected, onOpen: openBooking };
 
   const shift = (n: number) => {
     const d = parseISODate(date);
@@ -225,8 +238,8 @@ export default function AdminTimeline() {
     setNonce((n) => n + 1);
   };
 
-  const live = bookings.filter((b) => b.status !== 'cancelled');
-  const visible = showCancelled ? bookings : live;
+  const live = bookings.filter((b) => b.status !== 'cancelled' && b.status !== 'no_show');
+  const visible = showCancelled ? bookings : bookings.filter((b) => b.status !== 'cancelled');
   const covers = live.reduce((s, b) => s + b.party_size, 0);
   const used = live.reduce((s, b) => s + Math.max(0, Math.min(span.end, endOf(b)) - Math.max(span.start, mins(b.start_time))), 0);
   const activeTables = tables.filter((t) => t.is_active !== false);
@@ -304,7 +317,7 @@ export default function AdminTimeline() {
           ['Covers', String(covers)],
           ['Bookings', String(live.length)],
           ['Occupancy', `${occupancy}%`],
-          ['Cancelled', String(bookings.length - live.length)],
+          ['Cancelled', String(bookings.filter((b) => b.status === 'cancelled').length)],
         ].map(([k, v], i) => (
           <motion.div key={k} initial={{ opacity: 0, y: 14 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: i * 0.06 }} className="glass rounded-3xl p-5">
             <div className="text-[10px] font-semibold uppercase tracking-[0.26em] text-faint">{k}</div>
@@ -313,8 +326,18 @@ export default function AdminTimeline() {
         ))}
       </div>
 
-      <div className="mt-6 flex items-center justify-between text-sm">
+      <div className="mt-6 flex flex-wrap items-center justify-between gap-3 text-sm">
         <p className="text-muted">{formatDay(date)}</p>
+        <ul className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-fg/85" aria-label="Status legend">
+          {STATUSES.map((s) => (
+            <li key={s} className="flex items-center gap-1.5">
+              <span className="h-2.5 w-2.5 rounded-sm border" style={{ background: `color-mix(in oklab, ${statusColor(s)} 45%, transparent)`, borderColor: statusColor(s) }} />
+              {STATUS_LABEL[s]}
+            </li>
+          ))}
+          <li className="flex items-center gap-1">⚠️ Allergies</li>
+          <li className="flex items-center gap-1">🎂 Celebration</li>
+        </ul>
         <label className="flex items-center gap-2 text-xs text-muted">
           <input type="checkbox" checked={showCancelled} onChange={(e) => setShowCancelled(e.target.checked)} className="accent-[var(--ember)]" /> Show cancelled
         </label>
@@ -333,7 +356,7 @@ export default function AdminTimeline() {
         <div className="scroll-thin overflow-x-auto">
           <div className="relative min-w-[820px]">
             <div className="flex border-b border-line">
-              <div className="w-28 shrink-0 px-4 py-3 text-[10px] uppercase tracking-[0.2em] text-faint">Table</div>
+              <div className="w-28 shrink-0 px-4 py-3 text-[11px] uppercase tracking-[0.2em] text-fg/75">Table</div>
               <div className="relative h-10 flex-1">
                 {hours.map((h) => (
                   <span key={h} className="absolute top-3 -translate-x-1/2 text-xs tabular-nums text-muted first:translate-x-0" style={{ left: pctIn(span, h * 60) }}>
@@ -373,6 +396,7 @@ export default function AdminTimeline() {
           </div>
         </div>
       </div>
+      <BookingDrawer booking={bookings.find((b) => b.code === selected) ?? null} busy={busy} error={drawerError} onClose={closeDrawer} onStatus={setStatus} onCancel={cancel} />
       {state === 'ready' && !bookings.length && <p className="mt-6 text-center text-sm text-muted">No reservations yet for this night{upcomingDays.length ? ' - pick a night under Upcoming.' : '.'}</p>}
     </section>
   );
