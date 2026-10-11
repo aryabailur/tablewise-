@@ -23,3 +23,6 @@ backend/data/chroma/
 *.db
 .DS_Store
 scripts/jira_issues.json
+
+# Claude Code agent worktrees
+.claude/

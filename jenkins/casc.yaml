@@ -43,8 +43,8 @@ jobs:
               github {
                 id('tablewise-github')
                 repoOwner('${GITHUB_OWNER}')
-                repository('tablewise')
-                repositoryUrl('https://github.com/${GITHUB_OWNER}/tablewise')
+                repository('tablewise-')
+                repositoryUrl('https://github.com/${GITHUB_OWNER}/tablewise-')
                 configuredByUrl(false)
                 credentialsId('github-token')
                 traits {
