@@ -19,12 +19,12 @@ function celebrate() {
 function Step({ n, title, aside, children }: { n: string; title: string; aside?: ReactNode; children: ReactNode }) {
   return (
     <div>
-      <div className="mb-4 flex items-baseline justify-between gap-3">
-        <h3 className="flex items-baseline gap-3">
+      <div className="mb-4 flex min-w-0 items-baseline justify-between gap-3">
+        <h3 className="flex shrink-0 items-baseline gap-3">
           <span className="font-display text-sm italic text-gold">{n}</span>
           <span className="text-xs font-semibold uppercase tracking-[0.26em] text-muted">{title}</span>
         </h3>
-        {aside && <span className="text-xs text-faint">{aside}</span>}
+        {aside && <span className="min-w-0 truncate text-right text-xs text-faint">{aside}</span>}
       </div>
       {children}
     </div>
@@ -39,7 +39,10 @@ function DateStrip({ days, value, onChange }: { days: Date[]; value: string; onC
     if (sc && el) sc.scrollTo({ left: el.offsetLeft - sc.clientWidth / 2 + el.clientWidth / 2, behavior: 'smooth' });
   }, [value]);
   return (
-    <div ref={scroller} className="no-scrollbar mask-fade-x relative flex snap-x gap-3 overflow-x-auto px-6 py-3">
+    <div
+      ref={scroller}
+      className="no-scrollbar mask-fade-x relative flex snap-x snap-mandatory scroll-px-4 gap-2.5 overflow-x-auto overscroll-x-contain px-4 py-3 sm:snap-proximity sm:scroll-px-6 sm:gap-3 sm:px-6"
+    >
       {days.map((d, i) => {
         const iso = toISODate(d);
         const sel = iso === value;
@@ -56,7 +59,7 @@ function DateStrip({ days, value, onChange }: { days: Date[]; value: string; onC
             transition={{ delay: i * 0.03 }}
             whileHover={{ y: -3 }}
             whileTap={{ scale: 0.95 }}
-            className={`relative flex w-[76px] shrink-0 snap-center flex-col items-center rounded-2xl border px-2 pb-3 pt-2.5 transition-colors ${
+            className={`relative flex w-[68px] shrink-0 touch-manipulation snap-center flex-col items-center rounded-2xl border px-2 pb-3 pt-2.5 transition-colors sm:w-[76px] ${
               sel ? 'border-transparent text-on-ember' : 'border-line bg-glass text-fg hover:border-line-strong'
             }`}
           >
@@ -67,11 +70,11 @@ function DateStrip({ days, value, onChange }: { days: Date[]; value: string; onC
                 transition={{ type: 'spring', stiffness: 380, damping: 30 }}
               />
             )}
-            <span className="relative text-[10px] font-semibold uppercase tracking-[0.16em] opacity-80">
+            <span className="relative text-[11px] font-semibold uppercase tracking-[0.14em] opacity-80 sm:text-[10px] sm:tracking-[0.16em]">
               {i === 0 ? 'Tonight' : i === 1 ? 'Tmrw' : WEEKDAYS[d.getDay()]}
             </span>
             <span className="relative mt-1 font-display text-3xl leading-none">{d.getDate()}</span>
-            <span className="relative mt-1 text-[11px] uppercase tracking-wider opacity-70">{MONTHS[d.getMonth()]}</span>
+            <span className="relative mt-1 text-xs uppercase tracking-wider opacity-70 sm:text-[11px]">{MONTHS[d.getMonth()]}</span>
           </motion.button>
         );
       })}
@@ -86,13 +89,14 @@ function PartyDial({ value, onChange }: { value: number; onChange: (n: number) =
     prev.current = value;
   }, [value]);
   const R = 64;
-  const btn = 'grid h-11 w-11 place-items-center rounded-full border border-line bg-glass text-fg transition hover:border-ember/60 hover:text-ember disabled:opacity-30';
+  const btn =
+    'grid size-12 shrink-0 touch-manipulation place-items-center rounded-full border border-line bg-glass text-fg transition hover:border-ember/60 hover:text-ember disabled:opacity-30 sm:size-11';
   return (
-    <div className="flex items-center justify-center gap-6">
+    <div className="flex items-center justify-center gap-4 sm:gap-6">
       <button type="button" className={btn} onClick={() => onChange(Math.max(1, value - 1))} disabled={value <= 1} aria-label="Fewer guests">
-        <Minus className="h-4 w-4" />
+        <Minus className="size-5 sm:size-4" />
       </button>
-      <div className="relative h-44 w-44" role="spinbutton" aria-valuenow={value} aria-valuemin={1} aria-valuemax={12} aria-label="Party size">
+      <div className="relative size-40 shrink-0 sm:size-44" role="spinbutton" aria-valuenow={value} aria-valuemin={1} aria-valuemax={12} aria-label="Party size">
         <svg viewBox="0 0 180 180" className="absolute inset-0 h-full w-full -rotate-90">
           <defs>
             <linearGradient id="dial-grad" x1="0" y1="0" x2="1" y2="1">
@@ -148,15 +152,19 @@ function PartyDial({ value, onChange }: { value: number; onChange: (n: number) =
               </motion.span>
             </AnimatePresence>
           </div>
-          <span className="text-[11px] uppercase tracking-[0.24em] text-muted">{value === 1 ? 'guest' : 'guests'}</span>
+          <span className="text-xs uppercase tracking-[0.24em] text-muted sm:text-[11px]">{value === 1 ? 'guest' : 'guests'}</span>
         </div>
       </div>
       <button type="button" className={btn} onClick={() => onChange(Math.min(12, value + 1))} disabled={value >= 12} aria-label="More guests">
-        <Plus className="h-4 w-4" />
+        <Plus className="size-5 sm:size-4" />
       </button>
     </div>
   );
 }
+
+/** Phones get an even grid of 44px-tall pills; from sm up it is the original wrapping row. */
+const SLOT_ROW = 'grid grid-cols-[repeat(auto-fill,minmax(4.5rem,1fr))] gap-2 sm:flex sm:flex-wrap';
+const SLOT_PILL = 'min-h-11 justify-center px-3 text-[15px] sm:min-h-0 sm:px-4 sm:py-2 sm:text-sm';
 
 /** Staggers the shimmer sweep so a row of placeholders reads as one travelling wave. */
 const wave = (i: number) => ({ '--shimmer-delay': `${i * 70}ms` }) as CSSProperties;
@@ -166,9 +174,9 @@ function SlotSkeletons() {
   return (
     <div role="status" aria-busy="true">
       <span className="sr-only">Checking which seatings are free…</span>
-      <div aria-hidden className="flex flex-wrap gap-2">
+      <div aria-hidden className={SLOT_ROW}>
         {Array.from({ length: 11 }, (_, i) => (
-          <span key={i} className="shimmer inline-flex rounded-full px-4 py-2 text-sm font-medium tabular-nums" style={wave(i)}>
+          <span key={i} className={`shimmer flex items-center rounded-full font-medium tabular-nums ${SLOT_PILL}`} style={wave(i)}>
             <span className="invisible">00:00</span>
           </span>
         ))}
@@ -217,7 +225,7 @@ function TimeSlots({ slots, pending, loading, error, value, onChange, onRetry, a
   const open = slots.filter((s) => s.available).length;
   return (
     <div>
-      <motion.div key={animKey} initial="hidden" animate="show" variants={{ show: { transition: { staggerChildren: 0.035 } } }} className="flex flex-wrap gap-2">
+      <motion.div key={animKey} initial="hidden" animate="show" variants={{ show: { transition: { staggerChildren: 0.035 } } }} className={SLOT_ROW}>
         {slots.map((s) => {
           const sel = s.time === value;
           return (
@@ -229,7 +237,7 @@ function TimeSlots({ slots, pending, loading, error, value, onChange, onRetry, a
               aria-pressed={sel}
               variants={{ hidden: { opacity: 0, y: 10, scale: 0.9 }, show: { opacity: 1, y: 0, scale: 1 } }}
               whileHover={s.available ? { y: -2 } : undefined}
-              className={`relative rounded-full px-4 py-2 text-sm font-medium tabular-nums transition-colors ${
+              className={`relative flex touch-manipulation items-center rounded-full font-medium tabular-nums transition-colors ${SLOT_PILL} ${
                 !s.available
                   ? 'cursor-not-allowed border border-dashed border-line text-faint line-through'
                   : sel
@@ -370,27 +378,27 @@ export default function BookingPanel() {
   };
 
   return (
-    <section id="reserve" className="relative mx-auto max-w-6xl scroll-mt-24 px-4 py-24 sm:px-6">
+    <section id="reserve" className="relative mx-auto max-w-6xl scroll-mt-24 px-4 py-16 sm:px-6 sm:py-24">
       <motion.div initial={{ opacity: 0, y: 30 }} whileInView={{ opacity: 1, y: 0 }} viewport={{ once: true, margin: '-80px' }} transition={{ duration: 0.8 }} className="mb-10 text-center">
         <p className="text-xs font-semibold uppercase tracking-[0.35em] text-ember">Reservations</p>
-        <h2 className="mt-3 font-wonk text-4xl sm:text-6xl">
+        <h2 className="mt-3 text-balance font-wonk text-[2.5rem] leading-[1.08] sm:text-6xl">
           Reserve your <em className="text-ember-gradient pr-1">evening</em>
         </h2>
-        <p className="mx-auto mt-4 max-w-xl text-muted">Choose a night, tell us how many, and pick the seating that suits the mood.</p>
+        <p className="mx-auto mt-4 max-w-xl text-pretty text-[15px] text-muted sm:text-base">Choose a night, tell us how many, and pick the seating that suits the mood.</p>
       </motion.div>
 
-      <motion.div initial={{ opacity: 0, y: 40 }} whileInView={{ opacity: 1, y: 0 }} viewport={{ once: true, margin: '-60px' }} transition={{ duration: 0.9 }} className="glass rounded-[28px] p-5 sm:p-8 lg:p-10">
+      <motion.div initial={{ opacity: 0, y: 40 }} whileInView={{ opacity: 1, y: 0 }} viewport={{ once: true, margin: '-60px' }} transition={{ duration: 0.9 }} className="glass rounded-3xl p-4 sm:rounded-[28px] sm:p-8 lg:p-10">
         <Step n="01" title="Choose a night" aside={formatDay(date)}>
-          <div className="-mx-5 sm:-mx-8 lg:-mx-10">
+          <div className="-mx-4 sm:-mx-8 lg:-mx-10">
             <DateStrip days={days} value={date} onChange={setDate} />
           </div>
         </Step>
 
-        <div className="mt-10 grid gap-10 lg:grid-cols-[320px_minmax(0,1fr)]">
+        <div className="mt-8 grid gap-9 sm:mt-10 sm:gap-10 lg:grid-cols-[320px_minmax(0,1fr)]">
           <Step n="02" title="Party size">
             <PartyDial value={party} onChange={setParty} />
           </Step>
-          <div className="space-y-10">
+          <div className="min-w-0 space-y-9 sm:space-y-10">
             <Step n="03" title="Time">
               <TimeSlots slots={slots} pending={pending} loading={loading} error={availError} value={time} onChange={pickTime} onRetry={() => load(false)} animKey={`${date}-${party}`} />
             </Step>
@@ -410,13 +418,13 @@ export default function BookingPanel() {
                         layout
                         onClick={() => setTableId(t.id)}
                         aria-pressed={sel}
-                        className={`relative rounded-2xl border px-4 py-2.5 text-left text-sm transition ${sel ? 'border-ember bg-ember/15 shadow-[0_0_30px_-8px_var(--ember)]' : 'border-line bg-glass hover:border-ember/50'}`}
+                        className={`relative min-h-11 max-w-full touch-manipulation rounded-2xl border px-4 py-2.5 text-left text-sm transition ${sel ? 'border-ember bg-ember/15 shadow-[0_0_30px_-8px_var(--ember)]' : 'border-line bg-glass hover:border-ember/50'}`}
                       >
                         <span className="font-display text-lg">{t.name}</span>
                         <span className="ml-2 text-xs text-muted">
                           {zoneLabel(t.zone)} · {t.capacity} seats
                         </span>
-                        {slot.best_table?.id === t.id && <span className="ml-2 text-[10px] uppercase tracking-widest text-gold">best</span>}
+                        {slot.best_table?.id === t.id && <span className="ml-2 text-[11px] uppercase tracking-widest text-gold sm:text-[10px]">best</span>}
                       </motion.button>
                     );
                   })}
@@ -426,40 +434,40 @@ export default function BookingPanel() {
           </div>
         </div>
 
-        <div className="mt-10 border-t border-line pt-10">
+        <div className="mt-8 border-t border-line pt-8 sm:mt-10 sm:pt-10">
           <AnimatePresence mode="wait">
             {booking ? (
-              <motion.div key="ticket" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="flex flex-col items-center gap-6">
+              <motion.div key="ticket" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="flex w-full flex-col items-center gap-6">
                 <Ticket booking={booking} />
-                <button type="button" onClick={reset} className="glass-soft rounded-full px-5 py-2.5 text-sm text-fg hover:text-ember">
+                <button type="button" onClick={reset} className="glass-soft min-h-11 touch-manipulation rounded-full px-5 py-2.5 text-sm text-fg hover:text-ember">
                   Book another table
                 </button>
               </motion.div>
             ) : (
               <motion.form key="form" onSubmit={submit} initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0, y: -10 }} noValidate>
                 <Step n="05" title="Your details">
-                  <div className="grid gap-8 md:grid-cols-[minmax(0,1fr)_300px]">
-                    <div className="grid gap-4 sm:grid-cols-2">
+                  <div className="grid grid-cols-1 gap-6 sm:gap-8 md:grid-cols-[minmax(0,1fr)_300px]">
+                    <div className="grid min-w-0 grid-cols-1 gap-4 sm:grid-cols-2">
                       <label className="block sm:col-span-2">
-                        <span className="mb-1.5 block text-xs text-muted">Name *</span>
-                        <input className="field" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} placeholder="Ana Ruiz" autoComplete="name" aria-invalid={touched && nameMissing} />
-                        {touched && nameMissing && <span className="mt-1 block text-xs text-danger">Please tell us who the table is for.</span>}
+                        <span className="mb-1.5 block text-[13px] text-muted sm:text-xs">Name *</span>
+                        <input className="field text-base" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} placeholder="Ana Ruiz" autoComplete="name" aria-invalid={touched && nameMissing} />
+                        {touched && nameMissing && <span className="mt-1 block text-[13px] text-danger sm:text-xs">Please tell us who the table is for.</span>}
                       </label>
                       <label className="block">
-                        <span className="mb-1.5 block text-xs text-muted">Phone</span>
-                        <input className="field" type="tel" value={form.phone} onChange={(e) => setForm({ ...form, phone: e.target.value })} placeholder="+1 555 0100" autoComplete="tel" />
+                        <span className="mb-1.5 block text-[13px] text-muted sm:text-xs">Phone</span>
+                        <input className="field text-base" type="tel" value={form.phone} onChange={(e) => setForm({ ...form, phone: e.target.value })} placeholder="+1 555 0100" autoComplete="tel" inputMode="tel" />
                       </label>
                       <label className="block">
-                        <span className="mb-1.5 block text-xs text-muted">Email</span>
-                        <input className="field" type="email" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} placeholder="ana@example.com" autoComplete="email" />
+                        <span className="mb-1.5 block text-[13px] text-muted sm:text-xs">Email</span>
+                        <input className="field text-base" type="email" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} placeholder="ana@example.com" autoComplete="email" inputMode="email" autoCapitalize="off" spellCheck={false} />
                       </label>
                       <label className="block sm:col-span-2">
-                        <span className="mb-1.5 block text-xs text-muted">Notes</span>
-                        <textarea className="field min-h-24 resize-y" value={form.notes} onChange={(e) => setForm({ ...form, notes: e.target.value })} placeholder="Allergies, celebrations, seating wishes…" />
+                        <span className="mb-1.5 block text-[13px] text-muted sm:text-xs">Notes</span>
+                        <textarea className="field min-h-24 resize-y text-base" value={form.notes} onChange={(e) => setForm({ ...form, notes: e.target.value })} placeholder="Allergies, celebrations, seating wishes…" />
                       </label>
                     </div>
-                    <div className="glass-soft flex flex-col rounded-3xl p-5">
-                      <p className="text-[10px] font-semibold uppercase tracking-[0.28em] text-faint">Your evening</p>
+                    <div className="glass-soft flex min-w-0 flex-col rounded-3xl p-4 sm:p-5">
+                      <p className="text-[11px] font-semibold uppercase tracking-[0.28em] text-faint sm:text-[10px]">Your evening</p>
                       <dl className="mt-4 space-y-2.5 text-sm">
                         {[
                           ['Date', formatDay(date)],
@@ -469,14 +477,14 @@ export default function BookingPanel() {
                         ].map(([k, v]) => (
                           <div key={k} className="flex justify-between gap-3">
                             <dt className="text-muted">{k}</dt>
-                            <dd className="font-medium">{v}</dd>
+                            <dd className="min-w-0 break-words text-right font-medium">{v}</dd>
                           </div>
                         ))}
                       </dl>
                       <AnimatePresence>
                         {submitError && (
                           <motion.div initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: 'auto' }} exit={{ opacity: 0, height: 0 }} className="overflow-hidden">
-                            <div className="mt-4 flex gap-2 rounded-2xl border border-danger/30 bg-danger/10 p-3 text-xs text-fg">
+                            <div className="mt-4 flex gap-2 rounded-2xl border border-danger/30 bg-danger/10 p-3 text-[13px] text-fg sm:text-xs">
                               <CircleAlert className="h-4 w-4 shrink-0 text-danger" /> {submitError}
                             </div>
                           </motion.div>
@@ -485,7 +493,7 @@ export default function BookingPanel() {
                       <button
                         type="submit"
                         disabled={submitting || !slot}
-                        className="group ember-fill relative mt-auto inline-flex w-full items-center justify-center gap-2 overflow-hidden rounded-full px-6 py-3.5 text-sm font-semibold text-on-ember shadow-[0_0_40px_-8px_var(--ember)] transition disabled:cursor-not-allowed disabled:opacity-40 [&:not(:first-child)]:mt-5"
+                        className="group ember-fill relative mt-auto inline-flex min-h-12 w-full touch-manipulation items-center justify-center gap-2 overflow-hidden rounded-full px-6 py-3.5 text-sm font-semibold text-on-ember shadow-[0_0_40px_-8px_var(--ember)] transition disabled:cursor-not-allowed disabled:opacity-40 [&:not(:first-child)]:mt-5"
                       >
                         <span className="sheen" />
                         {submitting ? <LoaderCircle className="h-4 w-4 animate-spin" /> : null}
