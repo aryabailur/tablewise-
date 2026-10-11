@@ -1,6 +1,7 @@
 """RAG over the restaurant knowledge base: markdown -> heading chunks -> fastembed -> ChromaDB."""
 from __future__ import annotations
 
+import os
 import re
 import threading
 from pathlib import Path
@@ -10,8 +11,8 @@ import chromadb
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 KNOWLEDGE_DIR = BASE_DIR / "knowledge"
-CHROMA_DIR = BASE_DIR / "data" / "chroma"
-MODEL_CACHE = BASE_DIR / "data" / "fastembed_cache"
+CHROMA_DIR = Path(os.getenv("CHROMA_DIR") or BASE_DIR / "data" / "chroma")
+MODEL_CACHE = Path(os.getenv("FASTEMBED_CACHE_DIR") or BASE_DIR / "data" / "fastembed_cache")
 COLLECTION = "ember_vine_knowledge"
 EMBED_MODEL = "BAAI/bge-small-en-v1.5"
 

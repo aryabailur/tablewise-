@@ -1,0 +1,11 @@
+workflow-aggregator
+git
+github
+configuration-as-code
+job-dsl
+credentials-binding
+pipeline-stage-view
+blueocean
+ansicolor
+timestamper
+junit

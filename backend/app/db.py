@@ -3,7 +3,6 @@ from __future__ import annotations
 
 from datetime import datetime
 from pathlib import Path
-from typing import Optional
 
 from sqlalchemy import DateTime
 from sqlmodel import Field, Session, SQLModel, create_engine
@@ -16,7 +15,7 @@ engine = create_engine(f"sqlite:///{DB_PATH}", connect_args={"check_same_thread"
 
 
 class Table(SQLModel, table=True):
-    id: Optional[int] = Field(default=None, primary_key=True)
+    id: int | None = Field(default=None, primary_key=True)
     name: str = Field(index=True, unique=True)
     capacity: int
     zone: str  # window | garden | bar | private
@@ -24,17 +23,17 @@ class Table(SQLModel, table=True):
 
 
 class Booking(SQLModel, table=True):
-    id: Optional[int] = Field(default=None, primary_key=True)
+    id: int | None = Field(default=None, primary_key=True)
     code: str = Field(index=True, unique=True)
     guest_name: str
-    phone: Optional[str] = None
-    email: Optional[str] = None
+    phone: str | None = None
+    email: str | None = None
     party_size: int
     start_time: datetime = Field(index=True, sa_type=DateTime)  # naive local time
     duration_min: int = 90
     table_id: int = Field(foreign_key="table.id")
     status: str = Field(default="confirmed", index=True)  # confirmed | cancelled
-    notes: Optional[str] = None
+    notes: str | None = None
     created_at: datetime = Field(default_factory=datetime.now, sa_type=DateTime)
 
 

@@ -1,0 +1,64 @@
+# Jenkins Configuration as Code for the Tablewise controller.
+# Secrets come from container env vars (GITHUB_OWNER, GITHUB_TOKEN, JIRA_API_TOKEN) set by run.sh - never from files.
+jenkins:
+  systemMessage: "Tablewise CI - Ember & Vine booking concierge"
+  numExecutors: 2
+  securityRealm:
+    local:
+      allowsSignup: false
+      users:
+        - id: admin
+          password: admin
+  authorizationStrategy:
+    loggedInUsersCanDoAnything:
+      allowAnonymousRead: false
+
+unclassified:
+  location:
+    url: http://localhost:8080/
+
+credentials:
+  system:
+    domainCredentials:
+      - credentials:
+          - usernamePassword:
+              scope: GLOBAL
+              id: github-token
+              description: GitHub token for the tablewise repo
+              username: ${GITHUB_OWNER}
+              password: ${GITHUB_TOKEN}
+          - string:
+              scope: GLOBAL
+              id: jira-token
+              description: Jira API token for build comments
+              secret: ${JIRA_API_TOKEN}
+
+jobs:
+  - script: >
+      pipelineJob('tablewise') {
+        description('Tablewise CI: lint, tests, RAG ingest smoke test, frontend build, package')
+        properties {
+          pipelineTriggers {
+            triggers {
+              pollSCM {
+                scmpoll_spec('H/5 * * * *')
+              }
+            }
+          }
+        }
+        definition {
+          cpsScm {
+            scm {
+              git {
+                remote {
+                  url('https://github.com/${GITHUB_OWNER}/tablewise.git')
+                  credentials('github-token')
+                }
+                branch('*/main')
+              }
+            }
+            scriptPath('Jenkinsfile')
+            lightweight(true)
+          }
+        }
+      }

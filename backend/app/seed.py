@@ -44,7 +44,7 @@ def seed_demo_bookings(reset: bool = False) -> int:
             return 0
     rng = random.Random(42)
     made = 0
-    for offset in range(0, 4):
+    for offset in range(4):
         d = date.today() + timedelta(days=offset)
         for _ in range(9 if offset else 6):
             start = datetime.combine(d, time(17, 0)) + timedelta(minutes=30 * rng.randint(2, 9))

@@ -4,7 +4,6 @@ from __future__ import annotations
 import asyncio
 import json
 from contextlib import asynccontextmanager
-from typing import Optional
 
 from fastapi import FastAPI, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -50,22 +49,22 @@ class BookingCreate(BaseModel):
     guest_name: str
     party_size: int = Field(ge=1, le=bs.MAX_PARTY)
     start_time: str
-    phone: Optional[str] = None
-    email: Optional[str] = None
-    notes: Optional[str] = None
-    zone: Optional[str] = None
-    table_id: Optional[int] = None
+    phone: str | None = None
+    email: str | None = None
+    notes: str | None = None
+    zone: str | None = None
+    table_id: int | None = None
     duration_min: int = bs.DEFAULT_DURATION
 
 
 class BookingUpdate(BaseModel):
-    party_size: Optional[int] = Field(default=None, ge=1, le=bs.MAX_PARTY)
-    start_time: Optional[str] = None
-    notes: Optional[str] = None
-    guest_name: Optional[str] = None
-    phone: Optional[str] = None
-    email: Optional[str] = None
-    zone: Optional[str] = None
+    party_size: int | None = Field(default=None, ge=1, le=bs.MAX_PARTY)
+    start_time: str | None = None
+    notes: str | None = None
+    guest_name: str | None = None
+    phone: str | None = None
+    email: str | None = None
+    zone: str | None = None
 
 
 @app.get("/api/health")
@@ -80,12 +79,12 @@ def tables():
 
 @app.get("/api/availability")
 def availability(date: str = Query(..., description="YYYY-MM-DD"), party_size: int = Query(2, ge=1, le=bs.MAX_PARTY),
-                 zone: Optional[str] = None):
+                 zone: str | None = None):
     return bs.check_availability(date, party_size, zone=zone)
 
 
 @app.get("/api/bookings")
-def bookings(date: Optional[str] = None):
+def bookings(date: str | None = None):
     return bs.list_bookings(date)
 
 

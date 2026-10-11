@@ -8,20 +8,20 @@ from __future__ import annotations
 import os
 import sys
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 os.environ.setdefault("HF_HUB_DISABLE_SYMLINKS_WARNING", "1")
 
 try:  # mcp 1.x
-    from mcp.server.fastmcp import FastMCP  # noqa: E402
+    from mcp.server.fastmcp import FastMCP
 except ImportError:  # mcp 2.x renamed FastMCP -> MCPServer
-    from mcp.server.mcpserver import MCPServer as FastMCP  # noqa: E402
+    from mcp.server.mcpserver import MCPServer as FastMCP
 
-from app import booking_service as bs  # noqa: E402
-from app import rag  # noqa: E402
-from app.db import init_db  # noqa: E402
-from app.seed import seed_tables  # noqa: E402
+from app import booking_service as bs
+from app import rag
+from app.db import init_db
+from app.seed import seed_tables
 
 init_db()
 seed_tables()
@@ -44,7 +44,7 @@ def search_restaurant_info(query: str, k: int = 4) -> list[dict[str, Any]]:
 
 
 @mcp.tool()
-def check_availability(date: str, party_size: int, time: Optional[str] = None, zone: Optional[str] = None) -> dict:
+def check_availability(date: str, party_size: int, time: str | None = None, zone: str | None = None) -> dict:
     """Check free tables. date: YYYY-MM-DD; party_size 1-12; time: optional HH:MM (24h);
     zone: optional window|garden|bar|private. Seatings every 30 min, 17:00-22:00."""
     r = _safe(bs.check_availability, date, party_size, time, zone)
@@ -59,8 +59,8 @@ def check_availability(date: str, party_size: int, time: Optional[str] = None, z
 
 
 @mcp.tool()
-def create_booking(guest_name: str, party_size: int, date: str, time: str, phone: Optional[str] = None,
-                   email: Optional[str] = None, zone: Optional[str] = None, notes: Optional[str] = None) -> dict:
+def create_booking(guest_name: str, party_size: int, date: str, time: str, phone: str | None = None,
+                   email: str | None = None, zone: str | None = None, notes: str | None = None) -> dict:
     """Create a reservation (confirm details with the guest first). date YYYY-MM-DD, time HH:MM (24h).
     Returns the booking including its code (EV-XXXX)."""
     try:
@@ -78,8 +78,8 @@ def get_booking(code: str) -> dict:
 
 
 @mcp.tool()
-def modify_booking(code: str, date: Optional[str] = None, time: Optional[str] = None,
-                   party_size: Optional[int] = None, zone: Optional[str] = None, notes: Optional[str] = None) -> dict:
+def modify_booking(code: str, date: str | None = None, time: str | None = None,
+                   party_size: int | None = None, zone: str | None = None, notes: str | None = None) -> dict:
     """Modify a booking. Omitted fields keep their current values. date YYYY-MM-DD, time HH:MM (24h)."""
     start = None
     if date or time:

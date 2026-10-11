@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import secrets
 from datetime import date, datetime, time, timedelta
-from typing import Any, Optional
+from typing import Any
 
 from sqlmodel import select
 
@@ -38,7 +38,7 @@ def _slim(t: Table) -> dict[str, Any]:
     return {"id": t.id, "name": t.name, "capacity": t.capacity, "zone": t.zone}
 
 
-def booking_to_dict(b: Booking, table: Optional[Table] = None) -> dict[str, Any]:
+def booking_to_dict(b: Booking, table: Table | None = None) -> dict[str, Any]:
     if table is None:
         with get_session() as s:
             table = s.get(Table, b.table_id)
@@ -95,7 +95,7 @@ def parse_datetime(value: str | datetime) -> datetime:
         raise BookingError(f"Invalid datetime '{value}'. Use YYYY-MM-DDTHH:MM.") from exc
 
 
-def _normalize_zone(zone: Optional[str]) -> Optional[str]:
+def _normalize_zone(zone: str | None) -> str | None:
     if not zone:
         return None
     z = zone.strip().lower()
@@ -141,9 +141,9 @@ def _overlaps(b: Booking, start: datetime, end: datetime) -> bool:
 
 
 def _free_tables(session, start: datetime, duration: int, party_size: int,
-                 zone: Optional[str] = None, exclude_booking_id: Optional[int] = None) -> list[Table]:
+                 zone: str | None = None, exclude_booking_id: int | None = None) -> list[Table]:
     end = start + timedelta(minutes=duration)
-    tables = session.exec(select(Table).where(Table.is_active == True, Table.capacity >= party_size)).all()  # noqa: E712
+    tables = session.exec(select(Table).where(Table.is_active == True, Table.capacity >= party_size)).all()
     if zone:
         tables = [t for t in tables if t.zone == zone]
     day_start = datetime.combine(start.date(), time(0, 0))
@@ -163,8 +163,8 @@ def list_tables() -> list[dict[str, Any]]:
         return [table_to_dict(t) for t in s.exec(select(Table).order_by(Table.id)).all()]
 
 
-def check_availability(day: str | date, party_size: int, time_str: Optional[str] = None,
-                       zone: Optional[str] = None) -> dict[str, Any]:
+def check_availability(day: str | date, party_size: int, time_str: str | None = None,
+                       zone: str | None = None) -> dict[str, Any]:
     """Availability for a day. If time_str is given, also reports that exact slot + nearest alternatives."""
     d = parse_date(day)
     z = _normalize_zone(zone)
@@ -206,9 +206,9 @@ def _new_code(session) -> str:
             return code
 
 
-def create_booking(guest_name: str, party_size: int, start_time: str | datetime, phone: Optional[str] = None,
-                   email: Optional[str] = None, notes: Optional[str] = None, zone: Optional[str] = None,
-                   table_id: Optional[int] = None, duration_min: int = DEFAULT_DURATION) -> dict[str, Any]:
+def create_booking(guest_name: str, party_size: int, start_time: str | datetime, phone: str | None = None,
+                   email: str | None = None, notes: str | None = None, zone: str | None = None,
+                   table_id: int | None = None, duration_min: int = DEFAULT_DURATION) -> dict[str, Any]:
     if not guest_name or not guest_name.strip():
         raise BookingError("A guest name is required.")
     start = parse_datetime(start_time)
@@ -247,9 +247,9 @@ def get_booking(code: str) -> dict[str, Any]:
         return booking_to_dict(b, s.get(Table, b.table_id))
 
 
-def modify_booking(code: str, start_time: str | datetime | None = None, party_size: Optional[int] = None,
-                   notes: Optional[str] = None, guest_name: Optional[str] = None, phone: Optional[str] = None,
-                   email: Optional[str] = None, zone: Optional[str] = None) -> dict[str, Any]:
+def modify_booking(code: str, start_time: str | datetime | None = None, party_size: int | None = None,
+                   notes: str | None = None, guest_name: str | None = None, phone: str | None = None,
+                   email: str | None = None, zone: str | None = None) -> dict[str, Any]:
     with get_session() as s:
         b = _get(s, code)
         if b.status != "confirmed":

@@ -9,9 +9,10 @@ import json
 import os
 import re
 import uuid
+from collections.abc import AsyncIterator
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Annotated, Any, AsyncIterator, Literal, Optional, TypedDict
+from typing import Annotated, Any, Literal, TypedDict
 
 from dotenv import load_dotenv
 from langchain_core.messages import AIMessage, AIMessageChunk, AnyMessage, HumanMessage, SystemMessage, ToolMessage
@@ -52,7 +53,7 @@ def _err(e: Exception) -> str:
 
 
 @tool
-def check_availability(date: str, party_size: int, time: Optional[str] = None, zone: Optional[str] = None) -> str:
+def check_availability(date: str, party_size: int, time: str | None = None, zone: str | None = None) -> str:
     """Check which times have a free table. date: YYYY-MM-DD. party_size: number of guests (1-12).
     time: optional preferred time HH:MM (24h) - reports whether it is free plus nearest alternatives.
     zone: optional seating preference: window, garden, bar or private."""
@@ -71,8 +72,8 @@ def check_availability(date: str, party_size: int, time: Optional[str] = None, z
 
 
 @tool
-def create_booking(guest_name: str, party_size: int, date: str, time: str, phone: Optional[str] = None,
-                   email: Optional[str] = None, zone: Optional[str] = None, notes: Optional[str] = None) -> str:
+def create_booking(guest_name: str, party_size: int, date: str, time: str, phone: str | None = None,
+                   email: str | None = None, zone: str | None = None, notes: str | None = None) -> str:
     """Create a confirmed reservation. ONLY call after the guest has explicitly confirmed the recap.
     date: YYYY-MM-DD, time: HH:MM (24h). Provide phone or email. zone: window|garden|bar|private (optional).
     notes: allergies, occasions, requests (optional)."""
@@ -85,8 +86,8 @@ def create_booking(guest_name: str, party_size: int, date: str, time: str, phone
 
 
 @tool
-def modify_booking(code: str, date: Optional[str] = None, time: Optional[str] = None,
-                   party_size: Optional[int] = None, zone: Optional[str] = None, notes: Optional[str] = None) -> str:
+def modify_booking(code: str, date: str | None = None, time: str | None = None,
+                   party_size: int | None = None, zone: str | None = None, notes: str | None = None) -> str:
     """Change an existing booking identified by its code (EV-XXXX). Any of date (YYYY-MM-DD), time (HH:MM),
     party_size, zone, notes may be changed; omitted fields keep their current value."""
     try:
@@ -128,7 +129,7 @@ class AgentState(TypedDict, total=False):
     intent: str
     retrieved_docs: list[dict]
     tool_results: list[dict]
-    booking_draft: Optional[dict]
+    booking_draft: dict | None
 
 
 class Route(BaseModel):
@@ -149,7 +150,7 @@ def _text(content: Any) -> str:
 def _now_context() -> str:
     now = datetime.now()
     days = ", ".join(f"{(now.date() + timedelta(days=i)):%A}={(now.date() + timedelta(days=i)).isoformat()}"
-                     for i in range(0, 8))
+                     for i in range(8))
     return (f"Current server date/time: {now:%A %d %B %Y, %H:%M}. Today is {now.date().isoformat()}; tomorrow is "
             f"{(now.date() + timedelta(days=1)).isoformat()}. Upcoming days: {days}.")
 
@@ -282,7 +283,7 @@ async def router(state: AgentState) -> dict:
     writer({"type": "node", "node": "router", "status": "start"})
     msgs = state["messages"]
     last = _last_human(msgs)
-    intent: Optional[str] = None
+    intent: str | None = None
     if LLM_ENABLED:
         history = _text_history(msgs[:-1], limit=8)
         transcript = "\n".join(f"{'Guest' if isinstance(m, HumanMessage) else 'Concierge'}: {_text(m.content)[:400]}"
@@ -411,7 +412,7 @@ def _offline_booking(msgs: list[AnyMessage], writer) -> AIMessage:
     text = _last_human(msgs)
     low = text.lower()
     code = re.search(r"\bEV-[A-Z0-9]{4}\b", text.upper())
-    call: Optional[dict] = None
+    call: dict | None = None
     if code and "cancel" in low:
         call = {"name": "cancel_booking", "args": {"code": code.group(0)}}
     elif code:
