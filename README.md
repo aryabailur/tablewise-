@@ -2,6 +2,14 @@
 
 Tablewise is an AI host for **Ember & Vine**, a fictional restaurant. Guests chat in plain language ("table for 4 tomorrow at 8 in the garden?") and a LangGraph agent answers questions from the restaurant's own knowledge base (menu, allergens, policies, parking) with citations. It also checks real table availability and creates, modifies or cancels bookings in SQLite, and streams every step to a React UI over SSE. The same booking and RAG services are exposed as an **MCP server**, so Claude Desktop or Claude Code can run the restaurant's book too.
 
+## Team
+
+| Member | GitHub | Area |
+|---|---|---|
+| Arya Bailur | @aryabailur | Backend: booking engine, RAG, AI concierge, MCP |
+| Irisha Deshpande | @ahsiri14 | Frontend and Google Maps page |
+| devv296 | @devv296 | DevOps: Jenkins, Docker, GitHub Actions, CI/CD docs |
+
 ## Quickstart (Windows first)
 
 Prereqs: Python 3.11, [uv](https://docs.astral.sh/uv/) (`powershell -c "irm https://astral.sh/uv/install.ps1 | iex"`, which installs to `%USERPROFILE%\.local\bin`; add that to PATH), Node 20+.
