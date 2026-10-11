@@ -50,3 +50,19 @@ def test_chunker_splits_by_heading():
     assert [c["section"] for c in chunks] == ["Menu", "Mains", "Desserts"]
     assert all(c["source"] == "menu.md" for c in chunks)
     assert "Dry-aged ribeye." in chunks[1]["text"]
+
+
+def test_overlapping_bookings_get_separate_tables_until_full(temp_db):
+    start = datetime.combine(date.today() + timedelta(days=3), time(20, 0))
+    # only P2 (10) and P3 (12) seat ten guests
+    first = bs.create_booking(guest_name="Party A", party_size=10, start_time=start)
+    second = bs.create_booking(guest_name="Party B", party_size=10, start_time=start + timedelta(minutes=30))
+    assert first["table_id"] != second["table_id"]
+
+    with pytest.raises(bs.BookingError) as exc:  # overlaps both large tables
+        bs.create_booking(guest_name="Party C", party_size=10, start_time=start + timedelta(minutes=60))
+    assert exc.value.status_code == 409
+
+    # back-to-back is not an overlap: the first table frees up exactly when its 90-minute hold ends
+    third = bs.create_booking(guest_name="Party D", party_size=10, start_time=start + timedelta(minutes=90))
+    assert third["table_id"] == first["table_id"]

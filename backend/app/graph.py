@@ -134,9 +134,10 @@ class AgentState(TypedDict, total=False):
 
 class Route(BaseModel):
     """Classify the guest's latest message."""
-    intent: Literal["info", "booking", "smalltalk"] = Field(
+    intent: Literal["info", "booking", "smalltalk", "offtopic"] = Field(
         description="info = restaurant questions; booking = availability/reservations/changes/cancellations or "
-                    "continuing a booking conversation; smalltalk = greetings/thanks/chit-chat")
+                    "continuing a booking conversation; smalltalk = greetings/thanks/chit-chat; "
+                    "offtopic = requests unrelated to Ember & Vine")
 
 
 def _text(content: Any) -> str:
@@ -206,6 +207,12 @@ def _text_history(msgs: list[AnyMessage], limit: int = 30) -> list[AnyMessage]:
     return out
 
 
+_OFF_TOPIC = re.compile(r"\b(python|javascript|code|coding|program|homework|essay|poem|stocks?|crypto|bitcoin|"
+                        r"weather|news|election|politics|movie|translate|math)\b")
+_ON_TOPIC = re.compile(r"menu|dish|food|dinner|brunch|wine|drink|cocktail|allerg|vegan|gluten|table|reserv|book|"
+                       r"park|hour|open|event|ember|vine|chef|private|cancel|ev-[a-z0-9]{4}")
+
+
 def _heuristic_intent(text: str, msgs: list[AnyMessage]) -> str:
     t = text.lower()
     if re.search(r"\bev-[a-z0-9]{4}\b|\bbook|reserv|availab|table for|cancel|reschedul|modify|change my|"
@@ -213,6 +220,8 @@ def _heuristic_intent(text: str, msgs: list[AnyMessage]) -> str:
         return "booking"
     if re.fullmatch(r"\s*(hi|hello|hey|thanks|thank you|good (evening|morning|afternoon)|cheers)[!. ]*", t):
         return "smalltalk"
+    if _OFF_TOPIC.search(t) and not _ON_TOPIC.search(t):
+        return "offtopic"
     # short reply continuing a booking conversation ("yes", "Ana, 555-1234")
     prior = [m for m in msgs[:-1] if isinstance(m, AIMessage)]
     if prior and len(t.split()) <= 8 and re.search(r"confirm|book|reserv|name|phone|email", _text(prior[-1].content).lower()):
@@ -234,7 +243,12 @@ Classify the guest's LATEST message:
 - info: questions about the restaurant - menu, dishes, allergens, diets, hours, location, parking, policies, events,
   private dining, wine, corkage.
 - smalltalk: greetings, thanks, chit-chat with no information need.
+- offtopic: anything unrelated to Ember & Vine or dining there - coding, homework, news, finance, other businesses,
+  general trivia. Food and wine questions about a visit are info, not offtopic.
 Use the recent conversation: a short reply that continues a booking flow is booking."""
+
+GUARDRAIL_REPLY = ("I'm the concierge for Ember & Vine, so I can only help with things like reservations, the menu, "
+                   "allergens, opening hours, parking and events. Is there anything I can help you with for your visit?")
 
 BOOKING_SYSTEM = """You are the reservations concierge for Ember & Vine, an upscale wood-fire restaurant and natural \
 wine bar in San Francisco. You are warm, polished and concise - a great maitre d'.
@@ -296,7 +310,7 @@ async def router(state: AgentState) -> dict:
             intent = route.intent if isinstance(route, Route) else dict(route).get("intent")
         except Exception:
             intent = None  # fall back to heuristics (e.g. model without forced tool_choice support)
-    if intent not in ("info", "booking", "smalltalk"):
+    if intent not in ("info", "booking", "smalltalk", "offtopic"):
         intent = _heuristic_intent(last, msgs)
     writer({"type": "node", "node": "router", "status": "end", "intent": intent})
     return {"intent": intent, "tool_results": []}
@@ -342,6 +356,14 @@ async def booking_agent(state: AgentState) -> dict:
     msg = await _llm(1500).bind_tools(TOOLS).ainvoke([system] + _sanitize(msgs))
     update["messages"] = [msg]
     return update
+
+
+async def guardrail(state: AgentState) -> dict:
+    """Politely decline off-topic requests: no retrieval, no tools, no LLM call."""
+    writer = get_stream_writer()
+    writer({"type": "node", "node": "guardrail", "status": "start"})
+    _write_tokens(writer, GUARDRAIL_REPLY)
+    return {"messages": [AIMessage(content=GUARDRAIL_REPLY)]}
 
 
 async def respond(state: AgentState) -> dict:
@@ -451,7 +473,7 @@ def _offline_booking(msgs: list[AnyMessage], writer) -> AIMessage:
 # ====================================================================== graph
 
 def _after_router(state: AgentState) -> str:
-    return "respond" if state.get("intent") == "smalltalk" else "retrieve"
+    return {"smalltalk": "respond", "offtopic": "guardrail"}.get(state.get("intent") or "", "retrieve")
 
 
 def _after_retrieve(state: AgentState) -> str:
@@ -470,8 +492,10 @@ def build_graph():
     g.add_node("booking_agent", booking_agent)
     g.add_node("tools", ToolNode(TOOLS))
     g.add_node("respond", respond)
+    g.add_node("guardrail", guardrail)
     g.add_edge(START, "router")
-    g.add_conditional_edges("router", _after_router, ["retrieve", "respond"])
+    g.add_conditional_edges("router", _after_router, ["retrieve", "respond", "guardrail"])
+    g.add_edge("guardrail", END)
     g.add_conditional_edges("retrieve", _after_retrieve, ["booking_agent", "respond"])
     g.add_conditional_edges("booking_agent", _after_agent, ["tools", "respond"])
     g.add_edge("tools", "booking_agent")
