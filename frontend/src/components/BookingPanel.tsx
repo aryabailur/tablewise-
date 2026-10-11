@@ -1,0 +1,462 @@
+import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from 'react';
+import { AnimatePresence, motion } from 'framer-motion';
+import confetti from 'canvas-confetti';
+import { CircleAlert, LoaderCircle, Minus, Plus, RotateCcw } from 'lucide-react';
+import type { Availability, Booking, Slot } from '../lib/types';
+import { ApiError, BOOKING_CHANGED, createBooking, errorMessage, getAvailability, notifyBookingsChanged } from '../lib/api';
+import { MONTHS, WEEKDAYS, formatDay, nextDays, toISODate } from '../lib/time';
+import Ticket, { zoneLabel } from './Ticket';
+
+function celebrate() {
+  const opts = { colors: ['#ff7a3d', '#e3bc76', '#fbe9d0', '#b8441d', '#7d1f45'], disableForReducedMotion: true, zIndex: 80 };
+  confetti({ ...opts, particleCount: 110, spread: 80, startVelocity: 45, origin: { x: 0.5, y: 0.6 } });
+  window.setTimeout(() => {
+    confetti({ ...opts, particleCount: 60, angle: 60, spread: 60, origin: { x: 0, y: 0.75 } });
+    confetti({ ...opts, particleCount: 60, angle: 120, spread: 60, origin: { x: 1, y: 0.75 } });
+  }, 180);
+}
+
+function Step({ n, title, aside, children }: { n: string; title: string; aside?: ReactNode; children: ReactNode }) {
+  return (
+    <div>
+      <div className="mb-4 flex items-baseline justify-between gap-3">
+        <h3 className="flex items-baseline gap-3">
+          <span className="font-display text-sm italic text-gold">{n}</span>
+          <span className="text-xs font-semibold uppercase tracking-[0.26em] text-muted">{title}</span>
+        </h3>
+        {aside && <span className="text-xs text-faint">{aside}</span>}
+      </div>
+      {children}
+    </div>
+  );
+}
+
+function DateStrip({ days, value, onChange }: { days: Date[]; value: string; onChange: (iso: string) => void }) {
+  const scroller = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const sc = scroller.current;
+    const el = sc?.querySelector<HTMLElement>(`[data-iso="${value}"]`);
+    if (sc && el) sc.scrollTo({ left: el.offsetLeft - sc.clientWidth / 2 + el.clientWidth / 2, behavior: 'smooth' });
+  }, [value]);
+  return (
+    <div ref={scroller} className="no-scrollbar mask-fade-x relative flex snap-x gap-3 overflow-x-auto px-6 py-3">
+      {days.map((d, i) => {
+        const iso = toISODate(d);
+        const sel = iso === value;
+        return (
+          <motion.button
+            key={iso}
+            data-iso={iso}
+            type="button"
+            onClick={() => onChange(iso)}
+            aria-pressed={sel}
+            initial={{ opacity: 0, y: 16 }}
+            whileInView={{ opacity: 1, y: 0 }}
+            viewport={{ once: true }}
+            transition={{ delay: i * 0.03 }}
+            whileHover={{ y: -3 }}
+            whileTap={{ scale: 0.95 }}
+            className={`relative flex w-[76px] shrink-0 snap-center flex-col items-center rounded-2xl border px-2 pb-3 pt-2.5 transition-colors ${
+              sel ? 'border-transparent text-on-ember' : 'border-line bg-glass text-fg hover:border-line-strong'
+            }`}
+          >
+            {sel && (
+              <motion.span
+                layoutId="date-glow"
+                className="ember-fill absolute inset-0 rounded-2xl shadow-[0_10px_40px_-8px_var(--ember)]"
+                transition={{ type: 'spring', stiffness: 380, damping: 30 }}
+              />
+            )}
+            <span className="relative text-[10px] font-semibold uppercase tracking-[0.16em] opacity-80">
+              {i === 0 ? 'Tonight' : i === 1 ? 'Tmrw' : WEEKDAYS[d.getDay()]}
+            </span>
+            <span className="relative mt-1 font-display text-3xl leading-none">{d.getDate()}</span>
+            <span className="relative mt-1 text-[11px] uppercase tracking-wider opacity-70">{MONTHS[d.getMonth()]}</span>
+          </motion.button>
+        );
+      })}
+    </div>
+  );
+}
+
+function PartyDial({ value, onChange }: { value: number; onChange: (n: number) => void }) {
+  const prev = useRef(value);
+  const dir = value >= prev.current ? 1 : -1;
+  useEffect(() => {
+    prev.current = value;
+  }, [value]);
+  const R = 64;
+  const btn = 'grid h-11 w-11 place-items-center rounded-full border border-line bg-glass text-fg transition hover:border-ember/60 hover:text-ember disabled:opacity-30';
+  return (
+    <div className="flex items-center justify-center gap-6">
+      <button type="button" className={btn} onClick={() => onChange(Math.max(1, value - 1))} disabled={value <= 1} aria-label="Fewer guests">
+        <Minus className="h-4 w-4" />
+      </button>
+      <div className="relative h-44 w-44" role="spinbutton" aria-valuenow={value} aria-valuemin={1} aria-valuemax={12} aria-label="Party size">
+        <svg viewBox="0 0 180 180" className="absolute inset-0 h-full w-full -rotate-90">
+          <defs>
+            <linearGradient id="dial-grad" x1="0" y1="0" x2="1" y2="1">
+              <stop offset="0" style={{ stopColor: 'var(--gold)' }} />
+              <stop offset="1" style={{ stopColor: 'var(--ember)' }} />
+            </linearGradient>
+          </defs>
+          <circle cx="90" cy="90" r={R} fill="none" strokeWidth="10" style={{ stroke: 'var(--line)' }} />
+          <motion.circle
+            cx="90"
+            cy="90"
+            r={R}
+            fill="none"
+            strokeWidth="10"
+            strokeLinecap="round"
+            stroke="url(#dial-grad)"
+            initial={false}
+            animate={{ pathLength: value / 12 }}
+            transition={{ type: 'spring', stiffness: 140, damping: 20 }}
+            style={{ filter: 'drop-shadow(0 0 8px rgb(255 122 61 / .55))' }}
+          />
+          {Array.from({ length: 12 }, (_, i) => {
+            const a = (i / 12) * Math.PI * 2;
+            return (
+              <circle
+                key={i}
+                cx={90 + Math.cos(a) * 82}
+                cy={90 + Math.sin(a) * 82}
+                r={i < value ? 2.6 : 1.6}
+                style={{ fill: i < value ? 'var(--ember)' : 'var(--fg-faint)', transition: 'all .3s' }}
+              />
+            );
+          })}
+        </svg>
+        <div className="absolute inset-0 flex flex-col items-center justify-center">
+          <div className="relative h-16 w-24 overflow-hidden">
+            <AnimatePresence initial={false} custom={dir} mode="popLayout">
+              <motion.span
+                key={value}
+                custom={dir}
+                variants={{
+                  enter: (d: number) => ({ y: d > 0 ? 44 : -44, opacity: 0 }),
+                  center: { y: 0, opacity: 1 },
+                  exit: (d: number) => ({ y: d > 0 ? -44 : 44, opacity: 0 }),
+                }}
+                initial="enter"
+                animate="center"
+                exit="exit"
+                transition={{ type: 'spring', stiffness: 300, damping: 26 }}
+                className="absolute inset-0 text-center font-display text-6xl leading-[4rem]"
+              >
+                {value}
+              </motion.span>
+            </AnimatePresence>
+          </div>
+          <span className="text-[11px] uppercase tracking-[0.24em] text-muted">{value === 1 ? 'guest' : 'guests'}</span>
+        </div>
+      </div>
+      <button type="button" className={btn} onClick={() => onChange(Math.min(12, value + 1))} disabled={value >= 12} aria-label="More guests">
+        <Plus className="h-4 w-4" />
+      </button>
+    </div>
+  );
+}
+
+function TimeSlots({ slots, loading, error, value, onChange, onRetry, animKey }: {
+  slots: Slot[]; loading: boolean; error: string | null; value: string | null; onChange: (t: string) => void; onRetry: () => void; animKey: string;
+}) {
+  if (error)
+    return (
+      <div className="flex items-start gap-3 rounded-2xl border border-danger/30 bg-danger/10 p-4 text-sm text-fg">
+        <CircleAlert className="mt-0.5 h-4 w-4 shrink-0 text-danger" />
+        <div className="flex-1">{error}</div>
+        <button type="button" onClick={onRetry} className="inline-flex items-center gap-1 text-xs text-ember hover:underline">
+          <RotateCcw className="h-3 w-3" /> Retry
+        </button>
+      </div>
+    );
+  if (loading && !slots.length)
+    return (
+      <div className="flex flex-wrap gap-2">
+        {Array.from({ length: 11 }, (_, i) => (
+          <span key={i} className="skeleton h-9 w-[68px] rounded-full" />
+        ))}
+      </div>
+    );
+  if (!slots.length) return <p className="text-sm text-muted">No seatings on this date.</p>;
+  const open = slots.filter((s) => s.available).length;
+  return (
+    <div>
+      <motion.div key={animKey} initial="hidden" animate="show" variants={{ show: { transition: { staggerChildren: 0.035 } } }} className="flex flex-wrap gap-2">
+        {slots.map((s) => {
+          const sel = s.time === value;
+          return (
+            <motion.button
+              key={s.time}
+              type="button"
+              disabled={!s.available}
+              onClick={() => onChange(s.time)}
+              aria-pressed={sel}
+              variants={{ hidden: { opacity: 0, y: 10, scale: 0.9 }, show: { opacity: 1, y: 0, scale: 1 } }}
+              whileHover={s.available ? { y: -2 } : undefined}
+              className={`relative rounded-full px-4 py-2 text-sm font-medium tabular-nums transition-colors ${
+                !s.available
+                  ? 'cursor-not-allowed border border-dashed border-line text-faint line-through'
+                  : sel
+                    ? 'text-on-ember'
+                    : 'border border-ember/40 bg-ember/[0.08] text-fg shadow-[0_0_24px_-8px_var(--ember)] hover:border-ember/80 hover:bg-ember/15'
+              }`}
+            >
+              {sel && <motion.span layoutId="slot-glow" className="ember-fill absolute inset-0 rounded-full shadow-[0_0_30px_-4px_var(--ember)]" />}
+              <span className="relative">{s.time}</span>
+            </motion.button>
+          );
+        })}
+      </motion.div>
+      <p className="mt-3 text-xs text-faint">
+        {open} of {slots.length} seatings open{loading ? ' · refreshing…' : ''}
+      </p>
+    </div>
+  );
+}
+
+export default function BookingPanel() {
+  const days = useMemo(() => nextDays(14), []);
+  const [date, setDate] = useState(() => toISODate(days[0]));
+  const [party, setParty] = useState(2);
+  const [avail, setAvail] = useState<Availability | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [availError, setAvailError] = useState<string | null>(null);
+  const [time, setTime] = useState<string | null>(null);
+  const [tableId, setTableId] = useState<number | null>(null);
+  const [form, setForm] = useState({ name: '', phone: '', email: '', notes: '' });
+  const [touched, setTouched] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
+  const [submitError, setSubmitError] = useState<string | null>(null);
+  const [booking, setBooking] = useState<Booking | null>(null);
+  const reqId = useRef(0);
+
+  const load = useCallback(
+    async (silent = false) => {
+      const id = ++reqId.current;
+      setLoading(true);
+      if (!silent) setAvail(null);
+      try {
+        const a = await getAvailability(date, party);
+        if (id !== reqId.current) return;
+        setAvail(a && Array.isArray(a.slots) ? a : { date, party_size: party, slots: [] });
+        setAvailError(null);
+      } catch (e) {
+        if (id !== reqId.current) return;
+        setAvailError(errorMessage(e));
+      } finally {
+        if (id === reqId.current) setLoading(false);
+      }
+    },
+    [date, party],
+  );
+
+  useEffect(() => {
+    const t = window.setTimeout(() => load(false), 150);
+    return () => window.clearTimeout(t);
+  }, [load]);
+
+  const loadRef = useRef(load);
+  loadRef.current = load;
+  useEffect(() => {
+    const h = () => loadRef.current(true);
+    window.addEventListener(BOOKING_CHANGED, h);
+    return () => window.removeEventListener(BOOKING_CHANGED, h);
+  }, []);
+
+  const slots = avail?.slots ?? [];
+  const slot = slots.find((s) => s.time === time) ?? null;
+
+  useEffect(() => {
+    if (!avail) return;
+    const s = avail.slots.find((x) => x.time === time);
+    if (!s || !s.available) {
+      setTime(null);
+      setTableId(null);
+    } else if (!s.available_tables.some((t) => t.id === tableId)) {
+      setTableId(s.best_table?.id ?? s.available_tables[0]?.id ?? null);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [avail]);
+
+  const pickTime = (t: string) => {
+    setTime(t);
+    const s = slots.find((x) => x.time === t);
+    setTableId(s?.best_table?.id ?? s?.available_tables[0]?.id ?? null);
+    setSubmitError(null);
+  };
+
+  const table = slot?.available_tables.find((t) => t.id === tableId) ?? slot?.best_table ?? null;
+  const nameMissing = !form.name.trim();
+
+  const submit = async (e: FormEvent) => {
+    e.preventDefault();
+    setTouched(true);
+    if (!slot) {
+      setSubmitError('Choose a time first.');
+      return;
+    }
+    if (nameMissing) return;
+    setSubmitting(true);
+    setSubmitError(null);
+    try {
+      const b = await createBooking({
+        guest_name: form.name.trim(),
+        party_size: party,
+        start_time: slot.start || `${date}T${slot.time}:00`,
+        phone: form.phone.trim() || undefined,
+        email: form.email.trim() || undefined,
+        notes: form.notes.trim() || undefined,
+        table_id: table?.id,
+      });
+      setBooking(b);
+      celebrate();
+      notifyBookingsChanged();
+    } catch (err) {
+      setSubmitError(errorMessage(err));
+      if (err instanceof ApiError && err.status === 409) load(true);
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const reset = () => {
+    setBooking(null);
+    setTime(null);
+    setTableId(null);
+    setTouched(false);
+    setForm((f) => ({ ...f, notes: '' }));
+  };
+
+  return (
+    <section id="reserve" className="relative mx-auto max-w-6xl scroll-mt-24 px-4 py-24 sm:px-6">
+      <motion.div initial={{ opacity: 0, y: 30 }} whileInView={{ opacity: 1, y: 0 }} viewport={{ once: true, margin: '-80px' }} transition={{ duration: 0.8 }} className="mb-10 text-center">
+        <p className="text-xs font-semibold uppercase tracking-[0.35em] text-ember">Reservations</p>
+        <h2 className="mt-3 font-wonk text-4xl sm:text-6xl">
+          Reserve your <em className="text-ember-gradient pr-1">evening</em>
+        </h2>
+        <p className="mx-auto mt-4 max-w-xl text-muted">Choose a night, tell us how many, and pick the seating that suits the mood.</p>
+      </motion.div>
+
+      <motion.div initial={{ opacity: 0, y: 40 }} whileInView={{ opacity: 1, y: 0 }} viewport={{ once: true, margin: '-60px' }} transition={{ duration: 0.9 }} className="glass rounded-[28px] p-5 sm:p-8 lg:p-10">
+        <Step n="01" title="Choose a night" aside={formatDay(date)}>
+          <div className="-mx-5 sm:-mx-8 lg:-mx-10">
+            <DateStrip days={days} value={date} onChange={setDate} />
+          </div>
+        </Step>
+
+        <div className="mt-10 grid gap-10 lg:grid-cols-[320px_minmax(0,1fr)]">
+          <Step n="02" title="Party size">
+            <PartyDial value={party} onChange={setParty} />
+          </Step>
+          <div className="space-y-10">
+            <Step n="03" title="Time">
+              <TimeSlots slots={slots} loading={loading} error={availError} value={time} onChange={pickTime} onRetry={() => load(false)} animKey={`${date}-${party}`} />
+            </Step>
+            <Step n="04" title="Your table" aside={slot ? `${slot.available_tables.length} free at ${slot.time}` : undefined}>
+              {!slot ? (
+                <p className="text-sm text-muted">Pick a time to see which tables are free.</p>
+              ) : (
+                <div className="flex flex-wrap gap-2">
+                  {slot.available_tables.map((t) => {
+                    const sel = t.id === table?.id;
+                    return (
+                      <motion.button
+                        key={t.id}
+                        type="button"
+                        layout
+                        onClick={() => setTableId(t.id)}
+                        aria-pressed={sel}
+                        className={`relative rounded-2xl border px-4 py-2.5 text-left text-sm transition ${sel ? 'border-ember bg-ember/15 shadow-[0_0_30px_-8px_var(--ember)]' : 'border-line bg-glass hover:border-ember/50'}`}
+                      >
+                        <span className="font-display text-lg">{t.name}</span>
+                        <span className="ml-2 text-xs text-muted">
+                          {zoneLabel(t.zone)} · {t.capacity} seats
+                        </span>
+                        {slot.best_table?.id === t.id && <span className="ml-2 text-[10px] uppercase tracking-widest text-gold">best</span>}
+                      </motion.button>
+                    );
+                  })}
+                </div>
+              )}
+            </Step>
+          </div>
+        </div>
+
+        <div className="mt-10 border-t border-line pt-10">
+          <AnimatePresence mode="wait">
+            {booking ? (
+              <motion.div key="ticket" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="flex flex-col items-center gap-6">
+                <Ticket booking={booking} />
+                <button type="button" onClick={reset} className="glass-soft rounded-full px-5 py-2.5 text-sm text-fg hover:text-ember">
+                  Book another table
+                </button>
+              </motion.div>
+            ) : (
+              <motion.form key="form" onSubmit={submit} initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0, y: -10 }} noValidate>
+                <Step n="05" title="Your details">
+                  <div className="grid gap-8 md:grid-cols-[minmax(0,1fr)_300px]">
+                    <div className="grid gap-4 sm:grid-cols-2">
+                      <label className="block sm:col-span-2">
+                        <span className="mb-1.5 block text-xs text-muted">Name *</span>
+                        <input className="field" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} placeholder="Ana Ruiz" autoComplete="name" aria-invalid={touched && nameMissing} />
+                        {touched && nameMissing && <span className="mt-1 block text-xs text-danger">Please tell us who the table is for.</span>}
+                      </label>
+                      <label className="block">
+                        <span className="mb-1.5 block text-xs text-muted">Phone</span>
+                        <input className="field" type="tel" value={form.phone} onChange={(e) => setForm({ ...form, phone: e.target.value })} placeholder="+1 555 0100" autoComplete="tel" />
+                      </label>
+                      <label className="block">
+                        <span className="mb-1.5 block text-xs text-muted">Email</span>
+                        <input className="field" type="email" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} placeholder="ana@example.com" autoComplete="email" />
+                      </label>
+                      <label className="block sm:col-span-2">
+                        <span className="mb-1.5 block text-xs text-muted">Notes</span>
+                        <textarea className="field min-h-24 resize-y" value={form.notes} onChange={(e) => setForm({ ...form, notes: e.target.value })} placeholder="Allergies, celebrations, seating wishes…" />
+                      </label>
+                    </div>
+                    <div className="glass-soft flex flex-col rounded-3xl p-5">
+                      <p className="text-[10px] font-semibold uppercase tracking-[0.28em] text-faint">Your evening</p>
+                      <dl className="mt-4 space-y-2.5 text-sm">
+                        {[
+                          ['Date', formatDay(date)],
+                          ['Time', time ?? '—'],
+                          ['Guests', String(party)],
+                          ['Table', table ? `${table.name} · ${zoneLabel(table.zone)}` : '—'],
+                        ].map(([k, v]) => (
+                          <div key={k} className="flex justify-between gap-3">
+                            <dt className="text-muted">{k}</dt>
+                            <dd className="font-medium">{v}</dd>
+                          </div>
+                        ))}
+                      </dl>
+                      <AnimatePresence>
+                        {submitError && (
+                          <motion.div initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: 'auto' }} exit={{ opacity: 0, height: 0 }} className="overflow-hidden">
+                            <div className="mt-4 flex gap-2 rounded-2xl border border-danger/30 bg-danger/10 p-3 text-xs text-fg">
+                              <CircleAlert className="h-4 w-4 shrink-0 text-danger" /> {submitError}
+                            </div>
+                          </motion.div>
+                        )}
+                      </AnimatePresence>
+                      <button
+                        type="submit"
+                        disabled={submitting || !slot}
+                        className="group ember-fill relative mt-auto inline-flex w-full items-center justify-center gap-2 overflow-hidden rounded-full px-6 py-3.5 text-sm font-semibold text-on-ember shadow-[0_0_40px_-8px_var(--ember)] transition disabled:cursor-not-allowed disabled:opacity-40 [&:not(:first-child)]:mt-5"
+                      >
+                        <span className="sheen" />
+                        {submitting ? <LoaderCircle className="h-4 w-4 animate-spin" /> : null}
+                        {submitting ? 'Reserving…' : 'Confirm reservation'}
+                      </button>
+                    </div>
+                  </div>
+                </Step>
+              </motion.form>
+            )}
+          </AnimatePresence>
+        </div>
+      </motion.div>
+    </section>
+  );
+}

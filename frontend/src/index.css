@@ -1,0 +1,672 @@
+@import "tailwindcss";
+
+@custom-variant light (&:where([data-theme="light"], [data-theme="light"] *));
+
+@theme {
+  --font-display: "Fraunces", ui-serif, Georgia, Cambria, "Times New Roman", serif;
+  --font-sans: "Inter", ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
+}
+
+/* Semantic colours resolve per theme, so utilities like text-fg / bg-ember/20 just work. */
+@theme inline {
+  --color-base: var(--bg);
+  --color-elev: var(--bg-elev);
+  --color-fg: var(--fg);
+  --color-muted: var(--fg-muted);
+  --color-faint: var(--fg-faint);
+  --color-line: var(--line);
+  --color-line-strong: var(--line-strong);
+  --color-glass: var(--glass);
+  --color-glass-hi: var(--glass-hi);
+  --color-ember: var(--ember);
+  --color-ember-deep: var(--ember-deep);
+  --color-wine: var(--wine);
+  --color-gold: var(--gold);
+  --color-cream: var(--cream);
+  --color-sage: var(--sage);
+  --color-danger: var(--danger);
+  --color-on-ember: var(--on-ember);
+}
+
+/* ───────────────────────── Theme tokens ───────────────────────── */
+
+:root {
+  color-scheme: dark;
+  --bg: #0d0b0c;
+  --bg-elev: #161012;
+  --fg: #f7ede2;
+  --fg-muted: rgb(247 237 226 / 0.66);
+  --fg-faint: rgb(247 237 226 / 0.4);
+  --line: rgb(255 255 255 / 0.1);
+  --line-strong: rgb(255 255 255 / 0.18);
+  --glass: rgb(255 255 255 / 0.045);
+  --glass-hi: rgb(255 255 255 / 0.075);
+  --glass-strong: rgb(22 14 17 / 0.74);
+  --ember: #ff7a3d;
+  --ember-deep: #d9481c;
+  --wine: #5a0f2e;
+  --gold: #e3bc76;
+  --cream: #fbe9d0;
+  --sage: #8fbf94;
+  --danger: #ff6b7d;
+  --on-ember: #1a0905;
+
+  --z-window: #e3bc76;
+  --z-garden: #8fbf94;
+  --z-bar: #ff9a5c;
+  --z-private: #d77aa0;
+
+  --shadow-card: 0 30px 80px -30px rgb(0 0 0 / 0.85);
+  --inner-glow: inset 0 1px 0 0 rgb(255 255 255 / 0.07), inset 0 0 0 1px rgb(255 255 255 / 0.015),
+    inset 0 -60px 90px -60px rgb(255 122 61 / 0.12);
+
+  --mesh-a: #ff7a3d;
+  --mesh-b: #5a0f2e;
+  --mesh-c: #1d0a12;
+  --mesh-d: #b8441d;
+  --vignette: radial-gradient(120% 85% at 50% 35%, transparent 45%, rgb(0 0 0 / 0.6) 100%);
+  --grain-opacity: 0.07;
+  --grain-blend: normal;
+
+  --title-gradient: linear-gradient(
+    90deg,
+    #f6d9a8 0%,
+    #ffb27a 15%,
+    #ff7a3d 30%,
+    #ffe3c2 47%,
+    #e8b46a 62%,
+    #ff8a4c 80%,
+    #f6d9a8 100%
+  );
+  --ticket-bg: linear-gradient(165deg, #2c121a 0%, #1b0d12 55%, #130a0d 100%);
+  --ticket-ink: #f7ede2;
+  --input-bg: rgb(255 255 255 / 0.035);
+  --floor: rgb(255 255 255 / 0.018);
+  --counter: rgb(255 255 255 / 0.07);
+  --hearth: #1d0d10;
+}
+
+:root[data-theme="light"] {
+  color-scheme: light;
+  --bg: #f4eadb;
+  --bg-elev: #fbf4ea;
+  --fg: #2b1a14;
+  --fg-muted: rgb(43 26 20 / 0.7);
+  --fg-faint: rgb(43 26 20 / 0.45);
+  --line: rgb(74 38 24 / 0.13);
+  --line-strong: rgb(74 38 24 / 0.24);
+  --glass: rgb(255 251 244 / 0.55);
+  --glass-hi: rgb(255 255 255 / 0.7);
+  --glass-strong: rgb(252 246 237 / 0.88);
+  --ember: #e0582a;
+  --ember-deep: #b8401a;
+  --wine: #7d1f45;
+  --gold: #a87a2c;
+  --cream: #fff8ee;
+  --sage: #4f8a5b;
+  --danger: #c2334a;
+  --on-ember: #1f0b05;
+
+  --z-window: #a87a2c;
+  --z-garden: #4f8a5b;
+  --z-bar: #c8541f;
+  --z-private: #9b3463;
+
+  --shadow-card: 0 30px 70px -35px rgb(110 50 20 / 0.35);
+  --inner-glow: inset 0 1px 0 0 rgb(255 255 255 / 0.85), inset 0 -60px 90px -60px rgb(224 88 42 / 0.1);
+
+  --mesh-a: #ffb48a;
+  --mesh-b: #e9b4c6;
+  --mesh-c: #f4eadb;
+  --mesh-d: #f6c48f;
+  --vignette: radial-gradient(120% 85% at 50% 35%, transparent 55%, rgb(120 60 30 / 0.12) 100%);
+  --grain-opacity: 0.05;
+  --grain-blend: multiply;
+
+  --title-gradient: linear-gradient(
+    90deg,
+    #7d1f45 0%,
+    #b8401a 18%,
+    #e0582a 32%,
+    #a87a2c 50%,
+    #7d1f45 66%,
+    #c44a1f 82%,
+    #7d1f45 100%
+  );
+  --ticket-bg: linear-gradient(165deg, #fffaf2 0%, #f8ecd9 100%);
+  --ticket-ink: #2b1a14;
+  --input-bg: rgb(255 255 255 / 0.6);
+  --floor: rgb(255 255 255 / 0.35);
+  --counter: rgb(74 38 24 / 0.08);
+  --hearth: #2a1410;
+}
+
+/* ───────────────────────── Base ───────────────────────── */
+
+@layer base {
+  html {
+    scroll-behavior: smooth;
+    -webkit-tap-highlight-color: transparent;
+  }
+  body {
+    min-height: 100dvh;
+    background: var(--bg);
+    color: var(--fg);
+    font-family: var(--font-sans);
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    text-rendering: optimizeLegibility;
+  }
+  ::selection {
+    background: color-mix(in oklab, var(--ember) 40%, transparent);
+    color: var(--fg);
+  }
+  button:not(:disabled),
+  [role="button"] {
+    cursor: pointer;
+  }
+  :focus-visible {
+    outline: 2px solid var(--ember);
+    outline-offset: 3px;
+  }
+  input,
+  textarea,
+  select {
+    font: inherit;
+  }
+}
+
+/* ───────────────────────── Utilities ───────────────────────── */
+
+@utility glass {
+  background: var(--glass);
+  -webkit-backdrop-filter: blur(22px) saturate(150%);
+  backdrop-filter: blur(22px) saturate(150%);
+  border: 1px solid var(--line);
+  box-shadow: var(--inner-glow), var(--shadow-card);
+}
+
+@utility glass-strong {
+  background: var(--glass-strong);
+  -webkit-backdrop-filter: blur(28px) saturate(160%);
+  backdrop-filter: blur(28px) saturate(160%);
+  border: 1px solid var(--line);
+  box-shadow: var(--inner-glow), var(--shadow-card);
+}
+
+@utility glass-soft {
+  background: var(--glass);
+  -webkit-backdrop-filter: blur(14px) saturate(140%);
+  backdrop-filter: blur(14px) saturate(140%);
+  border: 1px solid var(--line);
+  box-shadow: inset 0 1px 0 0 rgb(255 255 255 / 0.05);
+}
+
+@utility no-scrollbar {
+  scrollbar-width: none;
+  &::-webkit-scrollbar {
+    display: none;
+  }
+}
+
+@utility scroll-thin {
+  scrollbar-width: thin;
+  scrollbar-color: color-mix(in oklab, var(--fg) 18%, transparent) transparent;
+}
+
+@utility mask-fade-x {
+  -webkit-mask-image: linear-gradient(to right, transparent, #000 28px, #000 calc(100% - 28px), transparent);
+  mask-image: linear-gradient(to right, transparent, #000 28px, #000 calc(100% - 28px), transparent);
+}
+
+@utility font-wonk {
+  font-family: var(--font-display);
+  font-variation-settings: "SOFT" 100, "WONK" 1;
+}
+
+@utility text-ember-gradient {
+  background-image: linear-gradient(120deg, #ffd2a8 0%, var(--ember) 45%, var(--gold) 100%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+
+@utility ember-fill {
+  background: linear-gradient(140deg, #ffb27a 0%, var(--ember) 45%, var(--ember-deep) 100%);
+}
+
+/* ───────────────────────── Keyframes ───────────────────────── */
+
+@property --shimmer-x {
+  syntax: "<number>";
+  inherits: true;
+  initial-value: 0;
+}
+
+@keyframes shimmer-x {
+  from {
+    --shimmer-x: 0;
+  }
+  to {
+    --shimmer-x: 1;
+  }
+}
+@keyframes mesh-a {
+  0% {
+    transform: translate3d(-6%, -4%, 0) rotate(0deg) scale(1);
+  }
+  50% {
+    transform: translate3d(5%, 3%, 0) rotate(12deg) scale(1.1);
+  }
+  100% {
+    transform: translate3d(-2%, 6%, 0) rotate(-6deg) scale(1.04);
+  }
+}
+@keyframes mesh-b {
+  0% {
+    transform: translate3d(4%, 2%, 0) rotate(0deg) scale(1.05);
+  }
+  50% {
+    transform: translate3d(-6%, -5%, 0) rotate(-14deg) scale(1);
+  }
+  100% {
+    transform: translate3d(3%, -2%, 0) rotate(8deg) scale(1.12);
+  }
+}
+@keyframes grain {
+  0%,
+  100% {
+    transform: translate(0, 0);
+  }
+  10% {
+    transform: translate(-5%, -10%);
+  }
+  20% {
+    transform: translate(-15%, 5%);
+  }
+  30% {
+    transform: translate(7%, -25%);
+  }
+  40% {
+    transform: translate(-5%, 25%);
+  }
+  50% {
+    transform: translate(-15%, 10%);
+  }
+  60% {
+    transform: translate(15%, 0%);
+  }
+  70% {
+    transform: translate(0%, 15%);
+  }
+  80% {
+    transform: translate(3%, 35%);
+  }
+  90% {
+    transform: translate(-10%, 10%);
+  }
+}
+@keyframes caret {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0;
+  }
+}
+@keyframes spin-slow {
+  to {
+    transform: rotate(360deg);
+  }
+}
+@keyframes skeleton {
+  from {
+    background-position: 200% 0;
+  }
+  to {
+    background-position: -200% 0;
+  }
+}
+@keyframes marquee {
+  from {
+    transform: translate3d(0, 0, 0);
+  }
+  to {
+    transform: translate3d(-50%, 0, 0);
+  }
+}
+@keyframes orb-pulse {
+  0%,
+  100% {
+    transform: scale(0.92);
+    opacity: 0.75;
+  }
+  50% {
+    transform: scale(1.18);
+    opacity: 1;
+  }
+}
+@keyframes sheen {
+  from {
+    transform: translateX(-130%) skewX(-18deg);
+  }
+  to {
+    transform: translateX(260%) skewX(-18deg);
+  }
+}
+@keyframes scroll-cue {
+  0% {
+    transform: scaleY(0);
+    transform-origin: top;
+  }
+  45% {
+    transform: scaleY(1);
+    transform-origin: top;
+  }
+  55% {
+    transform: scaleY(1);
+    transform-origin: bottom;
+  }
+  100% {
+    transform: scaleY(0);
+    transform-origin: bottom;
+  }
+}
+
+/* ───────────────────────── Background ───────────────────────── */
+
+.bg-mesh,
+.bg-mesh-2 {
+  position: absolute;
+  inset: -25%;
+  will-change: transform;
+}
+.bg-mesh {
+  background:
+    radial-gradient(36% 40% at 22% 26%, color-mix(in oklab, var(--mesh-a) 34%, transparent) 0%, transparent 70%),
+    radial-gradient(42% 48% at 80% 18%, color-mix(in oklab, var(--mesh-b) 78%, transparent) 0%, transparent 72%),
+    radial-gradient(46% 46% at 66% 84%, color-mix(in oklab, var(--mesh-d) 26%, transparent) 0%, transparent 70%),
+    radial-gradient(55% 55% at 10% 90%, color-mix(in oklab, var(--mesh-b) 62%, transparent) 0%, transparent 70%);
+  animation: mesh-a 38s ease-in-out infinite alternate;
+}
+.bg-mesh-2 {
+  opacity: 0.75;
+  background:
+    radial-gradient(30% 34% at 64% 46%, color-mix(in oklab, var(--mesh-a) 16%, transparent) 0%, transparent 70%),
+    radial-gradient(40% 44% at 34% 62%, color-mix(in oklab, var(--mesh-c) 90%, transparent) 0%, transparent 72%),
+    radial-gradient(28% 30% at 88% 70%, color-mix(in oklab, var(--mesh-b) 60%, transparent) 0%, transparent 70%);
+  animation: mesh-b 47s ease-in-out infinite alternate;
+}
+.bg-vignette {
+  position: absolute;
+  inset: 0;
+  background: var(--vignette);
+}
+.bg-grain {
+  position: absolute;
+  inset: -100%;
+  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='220' height='220'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='0.8' numOctaves='3' stitchTiles='stitch'/><feColorMatrix type='saturate' values='0'/></filter><rect width='100%' height='100%' filter='url(%23n)'/></svg>");
+  background-size: 200px 200px;
+  opacity: var(--grain-opacity);
+  mix-blend-mode: var(--grain-blend);
+  animation: grain 9s steps(10) infinite;
+}
+
+/* ───────────────────────── Hero title ───────────────────────── */
+
+.title-shimmer {
+  animation: shimmer-x 11s linear infinite;
+}
+.title-glow {
+  color: var(--ember);
+  filter: blur(42px);
+  opacity: 0.32;
+}
+[data-theme="light"] .title-glow {
+  opacity: 0.16;
+}
+
+/* ───────────────────────── Concierge orb ───────────────────────── */
+
+.orb-core {
+  background: radial-gradient(
+    circle at 32% 28%,
+    #ffe6cc 0%,
+    #ffab73 15%,
+    #ff7a3d 36%,
+    #a3301a 62%,
+    #5a0f2e 84%,
+    #1d0911 100%
+  );
+  box-shadow:
+    inset -6px -10px 18px rgb(0 0 0 / 0.45),
+    inset 4px 6px 12px rgb(255 255 255 / 0.25),
+    0 12px 32px -6px rgb(255 122 61 / 0.7);
+}
+.orb-halo {
+  background: radial-gradient(circle, rgb(255 122 61 / 0.55), transparent 66%);
+  filter: blur(10px);
+  animation: orb-pulse 3.2s ease-in-out infinite;
+}
+.orb-ring {
+  background: conic-gradient(
+    from 0deg,
+    transparent 0 18%,
+    rgb(255 214 176 / 0.95) 30%,
+    transparent 44% 66%,
+    rgb(227 188 118 / 0.85) 80%,
+    transparent 92%
+  );
+  -webkit-mask: radial-gradient(farthest-side, transparent calc(100% - 2px), #000 calc(100% - 2px));
+  mask: radial-gradient(farthest-side, transparent calc(100% - 2px), #000 calc(100% - 2px));
+  animation: spin-slow 5s linear infinite;
+}
+.orb-swirl {
+  background: conic-gradient(from 90deg, transparent, rgb(255 255 255 / 0.28), transparent 40%);
+  mix-blend-mode: soft-light;
+  animation: spin-slow 3.6s linear infinite;
+}
+
+/* ───────────────────────── Misc components ───────────────────────── */
+
+.skeleton {
+  background: linear-gradient(90deg, var(--glass) 25%, var(--glass-hi) 50%, var(--glass) 75%);
+  background-size: 200% 100%;
+  animation: skeleton 1.6s linear infinite;
+}
+
+.sheen {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  border-radius: inherit;
+  pointer-events: none;
+}
+.sheen::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 40%;
+  background: linear-gradient(90deg, transparent, rgb(255 255 255 / 0.35), transparent);
+  transform: translateX(-130%) skewX(-18deg);
+}
+.group:hover .sheen::after,
+.sheen-once::after {
+  animation: sheen 1.1s cubic-bezier(0.22, 1, 0.36, 1) forwards;
+}
+
+.marquee-track {
+  animation: marquee 42s linear infinite;
+}
+
+.scroll-cue {
+  animation: scroll-cue 2.4s cubic-bezier(0.65, 0, 0.35, 1) infinite;
+}
+
+.bar-cancelled {
+  background-image: repeating-linear-gradient(
+    -45deg,
+    color-mix(in oklab, var(--fg) 9%, transparent) 0 6px,
+    transparent 6px 12px
+  );
+}
+
+.ticket {
+  background: var(--ticket-bg);
+  color: var(--ticket-ink);
+}
+
+.field {
+  width: 100%;
+  border-radius: 14px;
+  border: 1px solid var(--line);
+  background: var(--input-bg);
+  padding: 0.75rem 0.95rem;
+  color: var(--fg);
+  transition:
+    border-color 0.25s,
+    box-shadow 0.25s,
+    background-color 0.25s;
+}
+.field::placeholder {
+  color: var(--fg-faint);
+}
+.field:hover {
+  border-color: var(--line-strong);
+}
+.field:focus {
+  outline: none;
+  border-color: color-mix(in oklab, var(--ember) 70%, transparent);
+  box-shadow:
+    0 0 0 4px color-mix(in oklab, var(--ember) 16%, transparent),
+    0 0 30px -8px var(--ember);
+}
+.field[aria-invalid="true"] {
+  border-color: color-mix(in oklab, var(--danger) 70%, transparent);
+}
+
+/* Floor plan focus */
+.fp-table:focus-visible .fp-body {
+  stroke: var(--gold) !important;
+  stroke-width: 3px !important;
+}
+
+/* Chat markdown */
+.prose-chat {
+  overflow-wrap: anywhere;
+}
+.prose-chat > * + * {
+  margin-top: 0.6em;
+}
+.prose-chat ul {
+  list-style: disc;
+  padding-left: 1.15em;
+}
+.prose-chat ol {
+  list-style: decimal;
+  padding-left: 1.25em;
+}
+.prose-chat li + li {
+  margin-top: 0.25em;
+}
+.prose-chat li::marker {
+  color: var(--ember);
+}
+.prose-chat strong {
+  font-weight: 600;
+  color: var(--fg);
+}
+.prose-chat em {
+  font-style: italic;
+}
+.prose-chat a {
+  color: var(--ember);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+.prose-chat code {
+  font-family: var(--font-mono);
+  font-size: 0.85em;
+  background: var(--glass-hi);
+  border: 1px solid var(--line);
+  padding: 0.08em 0.38em;
+  border-radius: 6px;
+}
+.prose-chat pre {
+  overflow-x: auto;
+  padding: 0.75em;
+  border-radius: 12px;
+  background: var(--glass-hi);
+}
+.prose-chat pre code {
+  border: 0;
+  background: none;
+  padding: 0;
+}
+.prose-chat h1,
+.prose-chat h2,
+.prose-chat h3,
+.prose-chat h4 {
+  font-family: var(--font-display);
+  font-weight: 600;
+  font-size: 1.06em;
+  color: var(--fg);
+}
+.prose-chat blockquote {
+  border-left: 2px solid var(--ember);
+  padding-left: 0.8em;
+  color: var(--fg-muted);
+}
+.prose-chat hr {
+  border-color: var(--line);
+}
+.prose-chat table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.92em;
+}
+.prose-chat th,
+.prose-chat td {
+  border-bottom: 1px solid var(--line);
+  padding: 0.35em 0.5em;
+  text-align: left;
+}
+
+/* Streaming caret, pinned to the end of the last rendered block. */
+.stream-caret > :last-child:not(ul):not(ol)::after,
+.stream-caret > :is(ul, ol):last-child > li:last-child::after,
+.caret-inline::after {
+  content: "";
+  display: inline-block;
+  width: 0.5em;
+  height: 1.05em;
+  margin-left: 0.15em;
+  vertical-align: -0.18em;
+  border-radius: 2px;
+  background: var(--ember);
+  box-shadow: 0 0 12px var(--ember);
+  animation: caret 1s steps(1) infinite;
+}
+
+/* View-transition circular theme reveal */
+::view-transition-old(root),
+::view-transition-new(root) {
+  animation: none;
+  mix-blend-mode: normal;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html {
+    scroll-behavior: auto;
+  }
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+  }
+}

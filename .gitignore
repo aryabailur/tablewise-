@@ -1,0 +1,25 @@
+# Secrets
+.env
+backend/.env
+!.env.example
+
+# Python
+.venv/
+__pycache__/
+*.pyc
+
+# Runtime data: SQLite DB, Chroma index, fastembed model cache
+backend/data/
+
+# Node
+node_modules/
+dist/
+
+# Logs
+*.log
+
+# Required by the ship checklist
+backend/data/chroma/
+*.db
+.DS_Store
+scripts/jira_issues.json
