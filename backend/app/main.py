@@ -1,4 +1,4 @@
-"""FastAPI app: REST booking API + SSE concierge chat."""
+"""FastAPI app: multi-restaurant REST booking API, SSE concierge chat and Prometheus metrics."""
 from __future__ import annotations
 
 import asyncio
@@ -6,35 +6,36 @@ import json
 import re
 from contextlib import asynccontextmanager
 from datetime import datetime
+from typing import Literal
 
 from fastapi import FastAPI, Path, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse
+from prometheus_fastapi_instrumentator import Instrumentator
 from pydantic import BaseModel, Field, field_validator
 
 from . import booking_service as bs
 from . import rag
-from .db import init_db
 from .graph import LLM_ENABLED, MODEL, PROVIDER, run_chat
-from .seed import seed_tables
+from .seed import ensure_seeded
 
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
-    init_db()
-    seed_tables()
+    ensure_seeded()
     if rag.count() == 0:
         await asyncio.to_thread(rag.ingest)
     yield
 
 
-app = FastAPI(title="Tablewise - Ember & Vine", version="0.1.0", lifespan=lifespan)
+app = FastAPI(title="Tablewise", version="0.2.0", lifespan=lifespan)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"],
+    allow_origins=["http://localhost:5173", "http://127.0.0.1:5173", "http://localhost:3000", "http://127.0.0.1:3000"],
     allow_methods=["*"],
     allow_headers=["*"],
 )
+Instrumentator(excluded_handlers=["/metrics"]).instrument(app).expose(app, include_in_schema=False)
 
 
 @app.exception_handler(bs.BookingError)
@@ -42,15 +43,20 @@ async def booking_error_handler(_: Request, exc: bs.BookingError):
     return JSONResponse(status_code=exc.status_code, content={"detail": exc.message})
 
 
-CODE_PATTERN = r"^[Ee][Vv]-[A-Za-z0-9]{4}$"
+CODE_PATTERN = r"^[A-Za-z]{2,3}-[A-Za-z0-9]{4}$"  # e.g. EMB-7K2P
+SLUG_PATTERN = r"^[a-z0-9][a-z0-9-]{0,63}$"
 DATE_PATTERN = r"^\d{4}-\d{2}-\d{2}$"
+TIME_PATTERN = r"^([01]\d|2[0-3]):[0-5]\d$"
+TAGS_PATTERN = r"^[A-Za-z0-9 ,-]*$"
 _PHONE = re.compile(r"\+?[0-9][0-9 ().-]{5,18}[0-9]")
 _EMAIL = re.compile(r"[^@\s]+@[^@\s]+\.[A-Za-z]{2,}")
+Source = Literal["web", "chat", "mcp", "google", "phone"]
 
 
 class ChatRequest(BaseModel):
     message: str = Field(min_length=1, max_length=4000)
     thread_id: str = Field(min_length=1, max_length=128, pattern=r"^[\w.:-]+$")
+    restaurant_slug: str | None = Field(default=None, max_length=64, pattern=SLUG_PATTERN)
 
 
 class _BookingInput(BaseModel):
@@ -95,6 +101,11 @@ class BookingCreate(_BookingInput):
     zone: str | None = None
     table_id: int | None = Field(default=None, ge=1)
     duration_min: int = Field(default=bs.DEFAULT_DURATION, ge=30, le=240)
+    source: Source = "web"
+
+
+class LegacyBookingCreate(BookingCreate):
+    restaurant_slug: str | None = Field(default=None, max_length=64, pattern=SLUG_PATTERN)
 
 
 class BookingUpdate(_BookingInput):
@@ -107,51 +118,114 @@ class BookingUpdate(_BookingInput):
     zone: str | None = None
 
 
+def _slug_path(description: str = "Restaurant slug, e.g. ember-vine"):
+    return Path(pattern=SLUG_PATTERN, max_length=64, description=description)
+
+
+def _code_path():
+    return Path(pattern=CODE_PATTERN, description="Booking code, e.g. EMB-7K2P")
+
+
+def _restaurant_query():
+    return Query(bs.DEFAULT_RESTAURANT, pattern=SLUG_PATTERN, max_length=64, description="Restaurant slug")
+
+
+# ---------------------------------------------------------------- health
+
 @app.get("/api/health")
 def health():
-    return {"status": "ok", "llm": LLM_ENABLED, "provider": PROVIDER, "model": MODEL, "documents": rag.count()}
+    try:
+        restaurants = len(bs.restaurant_slugs())
+    except Exception:
+        restaurants = 0
+    return {"status": "ok", "llm": LLM_ENABLED, "provider": PROVIDER, "model": MODEL, "documents": rag.count(),
+            "restaurants": restaurants}
 
+
+# ---------------------------------------------------------------- restaurants
+
+@app.get("/api/restaurants")
+def restaurants(q: str | None = Query(None, max_length=100), area: str | None = Query(None, max_length=60),
+                cuisine: str | None = Query(None, max_length=60), price_level: int | None = Query(None, ge=1, le=4),
+                tags: str | None = Query(None, max_length=200, pattern=TAGS_PATTERN, description="comma-separated"),
+                party_size: int = Query(2, ge=1, le=bs.MAX_PARTY),
+                date: str | None = Query(None, pattern=DATE_PATTERN, description="YYYY-MM-DD (default today)"),
+                time: str | None = Query(None, pattern=TIME_PATTERN, description="HH:MM (default now)")):
+    return bs.search_restaurants(q=q, cuisine=cuisine, area=area, price_level=price_level, tags=tags,
+                                 party_size=party_size, date=date, time=time)
+
+
+@app.get("/api/restaurants/{slug}")
+def restaurant(slug: str = _slug_path()):
+    return bs.get_restaurant(slug) | {"docs": rag.read_docs(slug)}
+
+
+@app.get("/api/restaurants/{slug}/tables")
+def restaurant_tables(slug: str = _slug_path()):
+    return bs.list_tables(slug)
+
+
+@app.get("/api/restaurants/{slug}/availability")
+def restaurant_availability(slug: str = _slug_path(),
+                            date: str = Query(..., pattern=DATE_PATTERN, description="YYYY-MM-DD"),
+                            party_size: int = Query(2, ge=1, le=bs.MAX_PARTY),
+                            zone: str | None = Query(None, max_length=20)):
+    return bs.check_availability(slug, date, party_size, zone=zone)
+
+
+@app.post("/api/restaurants/{slug}/bookings", status_code=201)
+def restaurant_create_booking(body: BookingCreate, slug: str = _slug_path()):
+    return bs.create_booking(slug, **body.model_dump())
+
+
+# ---------------------------------------------------------------- bookings (global codes) + legacy routes
 
 @app.get("/api/tables")
-def tables():
-    return bs.list_tables()
+def tables(restaurant: str = _restaurant_query()):
+    return bs.list_tables(restaurant)
 
 
 @app.get("/api/availability")
 def availability(date: str = Query(..., pattern=DATE_PATTERN, description="YYYY-MM-DD"),
-                 party_size: int = Query(2, ge=1, le=bs.MAX_PARTY), zone: str | None = Query(None, max_length=20)):
-    return bs.check_availability(date, party_size, zone=zone)
+                 party_size: int = Query(2, ge=1, le=bs.MAX_PARTY), zone: str | None = Query(None, max_length=20),
+                 restaurant: str = _restaurant_query()):
+    return bs.check_availability(restaurant, date, party_size, zone=zone)
 
 
 @app.get("/api/bookings")
-def bookings(date: str | None = Query(None, pattern=DATE_PATTERN, description="YYYY-MM-DD")):
-    return bs.list_bookings(date)
+def bookings(date: str | None = Query(None, pattern=DATE_PATTERN, description="YYYY-MM-DD"),
+             restaurant: str | None = Query(None, pattern=SLUG_PATTERN, max_length=64)):
+    return bs.list_bookings(date, restaurant)
 
 
 @app.post("/api/bookings", status_code=201)
-def create(body: BookingCreate):
-    return bs.create_booking(**body.model_dump())
+def create(body: LegacyBookingCreate, restaurant: str | None = Query(None, pattern=SLUG_PATTERN, max_length=64)):
+    data = body.model_dump()
+    slug = data.pop("restaurant_slug") or restaurant or bs.DEFAULT_RESTAURANT
+    return bs.create_booking(slug, **data)
 
 
 @app.get("/api/bookings/{code}")
-def get(code: str = Path(pattern=CODE_PATTERN, description="Booking code, e.g. EV-7K2P")):
+def get(code: str = _code_path()):
     return bs.get_booking(code)
 
 
 @app.patch("/api/bookings/{code}")
-def update(body: BookingUpdate, code: str = Path(pattern=CODE_PATTERN, description="Booking code, e.g. EV-7K2P")):
+def update(body: BookingUpdate, code: str = _code_path()):
     return bs.modify_booking(code, **body.model_dump())
 
 
 @app.delete("/api/bookings/{code}")
-def cancel(code: str = Path(pattern=CODE_PATTERN, description="Booking code, e.g. EV-7K2P")):
+def cancel(code: str = _code_path()):
     return bs.cancel_booking(code)
 
+
+# ---------------------------------------------------------------- chat
 
 @app.post("/api/chat")
 async def chat(req: ChatRequest):
     async def events():
-        async for evt in run_chat(req.message, req.thread_id):
+        async for evt in run_chat(req.message, req.thread_id, req.restaurant_slug):
             yield f"data: {json.dumps(evt, default=str)}\n\n"
 
     return StreamingResponse(events(), media_type="text/event-stream",
