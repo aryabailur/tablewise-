@@ -444,7 +444,7 @@ export default function Concierge({ open, onOpenChange }: { open: boolean; onOpe
           msg,
           threadId,
           (evt) => {
-            if (evt.type === 'booking') notifyBookingsChanged();
+            if (evt.type === 'booking') notifyBookingsChanged(evt.booking);
             update((t) => reduce(t, evt));
           },
           ctrl.signal,

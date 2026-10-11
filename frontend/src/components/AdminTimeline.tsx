@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { motion } from 'framer-motion';
 import { ChevronLeft, ChevronRight, CircleAlert, Users, X } from 'lucide-react';
 import type { Booking, Table } from '../lib/types';
-import { BOOKING_CHANGED, cancelBooking, errorMessage, getTables, listBookings, notifyBookingsChanged } from '../lib/api';
+import { BOOKING_CHANGED, cancelBooking, errorMessage, getTables, lastBooking, listBookings, notifyBookingsChanged } from '../lib/api';
 import { formatDay, parseISODate, parseLocal, toISODate } from '../lib/time';
 import { zoneLabel } from './Ticket';
 
@@ -18,8 +18,17 @@ const mins = (iso: string) => {
 };
 const pct = (m: number) => `${((Math.min(END, Math.max(START, m)) - START) / SPAN) * 100}%`;
 
+/** Open on the night of the most recent booking if it's still upcoming, otherwise tonight. */
+function initialDate(): string {
+  const today = toISODate(new Date());
+  const day = lastBooking()?.start_time.slice(0, 10);
+  return day && day >= today ? day : today;
+}
+
 export default function AdminTimeline() {
-  const [date, setDate] = useState(() => toISODate(new Date()));
+  const [date, setDate] = useState(initialDate);
+  const [highlight, setHighlight] = useState<string | null>(() => lastBooking()?.code ?? null);
+  const [upcoming, setUpcoming] = useState<[string, number][]>([]);
   const [tables, setTables] = useState<Table[]>([]);
   const [bookings, setBookings] = useState<Booking[]>([]);
   const [state, setState] = useState<'loading' | 'ready' | 'error'>('loading');
@@ -60,15 +69,52 @@ export default function AdminTimeline() {
   }, [load]);
   const loadRef = useRef(load);
   loadRef.current = load;
+
+  // Nights that have bookings, so reservations on other dates are one click away.
+  const loadUpcoming = useCallback(async () => {
+    try {
+      const all = await listBookings();
+      const today = toISODate(new Date());
+      const counts = new Map<string, number>();
+      for (const b of Array.isArray(all) ? all : []) {
+        const day = b.start_time.slice(0, 10);
+        if (b.status !== 'cancelled' && day >= today) counts.set(day, (counts.get(day) ?? 0) + 1);
+      }
+      setUpcoming([...counts].sort(([a], [b]) => a.localeCompare(b)).slice(0, 10));
+    } catch {
+      /* the day view shows its own error */
+    }
+  }, []);
   useEffect(() => {
-    const h = () => loadRef.current(true);
-    window.addEventListener(BOOKING_CHANGED, h);
-    const t = window.setInterval(h, 30000);
+    loadUpcoming();
+  }, [loadUpcoming]);
+
+  useEffect(() => {
+    const onChange = (e: Event) => {
+      const b = (e as CustomEvent<Booking | undefined>).detail;
+      if (b?.start_time) {
+        setDate(b.start_time.slice(0, 10)); // jump to the night of the booking that just changed
+        setHighlight(b.code);
+      }
+      loadRef.current(true);
+      loadUpcoming();
+    };
+    const refresh = () => {
+      loadRef.current(true);
+      loadUpcoming();
+    };
+    window.addEventListener(BOOKING_CHANGED, onChange);
+    const t = window.setInterval(refresh, 30000);
     return () => {
-      window.removeEventListener(BOOKING_CHANGED, h);
+      window.removeEventListener(BOOKING_CHANGED, onChange);
       window.clearInterval(t);
     };
-  }, []);
+  }, [loadUpcoming]);
+  useEffect(() => {
+    if (!highlight) return;
+    const t = window.setTimeout(() => setHighlight(null), 8000);
+    return () => window.clearTimeout(t);
+  }, [highlight]);
   useEffect(() => {
     if (!confirm) return;
     const t = window.setTimeout(() => setConfirm(null), 3500);
@@ -122,7 +168,7 @@ export default function AdminTimeline() {
         initial={{ opacity: 0, scaleX: 0.6 }}
         animate={{ opacity: cancelled ? 0.5 : 1, scaleX: 1 }}
         title={`${b.guest_name} · ${b.party_size} guests · ${b.code}${b.notes ? ` · ${b.notes}` : ''}`}
-        className={`group/bar absolute inset-y-1.5 flex items-center gap-2 overflow-hidden rounded-xl border px-2.5 text-xs ${cancelled ? 'bar-cancelled z-0 border-line line-through' : 'z-10'}`}
+        className={`group/bar absolute inset-y-1.5 flex items-center gap-2 overflow-hidden rounded-xl border px-2.5 text-xs ${cancelled ? 'bar-cancelled z-0 border-line line-through' : 'z-10'} ${highlight === b.code ? 'ring-2 ring-[var(--ember)] shadow-[0_0_18px_var(--ember)]' : ''}`}
         style={{
           left: pct(st),
           width: `calc(${pct(en)} - ${pct(st)})`,
@@ -185,6 +231,23 @@ export default function AdminTimeline() {
           </button>
         </div>
       </div>
+
+      {upcoming.length > 0 && (
+        <div className="scroll-thin mt-6 flex items-center gap-2 overflow-x-auto pb-1">
+          <span className="shrink-0 text-[10px] font-semibold uppercase tracking-[0.26em] text-faint">Upcoming</span>
+          {upcoming.map(([day, n]) => (
+            <button
+              key={day}
+              type="button"
+              onClick={() => setDate(day)}
+              aria-pressed={day === date}
+              className={`shrink-0 rounded-full border px-3 py-1.5 text-xs transition ${day === date ? 'border-ember bg-ember/15 text-ember' : 'border-line bg-glass text-muted hover:text-ember'}`}
+            >
+              {formatDay(day)} · {n}
+            </button>
+          ))}
+        </div>
+      )}
 
       <div className="mt-8 grid grid-cols-2 gap-3 md:grid-cols-4">
         {[
@@ -261,7 +324,7 @@ export default function AdminTimeline() {
           </div>
         </div>
       </div>
-      {state === 'ready' && !bookings.length && <p className="mt-6 text-center text-sm text-muted">No reservations yet for this night.</p>}
+      {state === 'ready' && !bookings.length && <p className="mt-6 text-center text-sm text-muted">No reservations yet for this night{upcoming.length ? ' - pick a night under Upcoming.' : '.'}</p>}
     </section>
   );
 }
