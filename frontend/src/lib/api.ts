@@ -51,10 +51,32 @@ export const getAvailability = (date: string, party: number) => request<Availabi
 export const createBooking = (b: BookingCreate) => request<Booking>('/api/bookings', { method: 'POST', body: b });
 export const getBooking = (code: string) => request<Booking>(`/api/bookings/${encodeURIComponent(code)}`);
 export const cancelBooking = (code: string) => request<Booking>(`/api/bookings/${encodeURIComponent(code)}`, { method: 'DELETE' });
-export const listBookings = (date: string) => request<Booking[]>(`/api/bookings?date=${date}`);
+export const listBookings = (date?: string) => request<Booking[]>(date ? `/api/bookings?date=${date}` : '/api/bookings');
 
 export const BOOKING_CHANGED = 'tablewise:booking-changed';
-export const notifyBookingsChanged = () => window.dispatchEvent(new CustomEvent(BOOKING_CHANGED));
+const LAST_BOOKING_KEY = 'tablewise:last-booking';
+export type LastBooking = { code: string; start_time: string };
+
+/** Tell open views a booking changed, and remember it so views mounted later (the admin tab) can jump to it. */
+export const notifyBookingsChanged = (booking?: Booking) => {
+  if (booking) {
+    try {
+      localStorage.setItem(LAST_BOOKING_KEY, JSON.stringify({ code: booking.code, start_time: booking.start_time }));
+    } catch {
+      /* storage unavailable: live views still get the event */
+    }
+  }
+  window.dispatchEvent(new CustomEvent<Booking | undefined>(BOOKING_CHANGED, { detail: booking }));
+};
+
+export function lastBooking(): LastBooking | null {
+  try {
+    const raw = localStorage.getItem(LAST_BOOKING_KEY);
+    return raw ? (JSON.parse(raw) as LastBooking) : null;
+  } catch {
+    return null;
+  }
+}
 
 export function uuid(): string {
   const c = globalThis.crypto;
