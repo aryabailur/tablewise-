@@ -13,6 +13,7 @@ from sqlalchemy import String, cast, func, or_
 from sqlmodel import select
 
 from . import metrics
+from .allergens import ALLERGENS
 from .db import Booking, Restaurant, Table, get_session
 
 DEFAULT_RESTAURANT = "ember-vine"
@@ -21,6 +22,16 @@ DEFAULT_DURATION = 90
 MAX_PARTY = 12
 ZONES = ("window", "garden", "bar", "private", "rooftop", "patio")
 SOURCES = ("web", "chat", "mcp", "google", "phone")
+DIETARY = ("veg", "vegan", "jain", "halal", "none")
+OCCASIONS = ("birthday", "anniversary", "business", "date", "none")
+STATUSES = ("confirmed", "seated", "completed", "no_show", "cancelled")
+ACTIVE_STATUSES = ("confirmed", "seated")  # only these hold a table
+MAX_SPECIAL_REQUESTS = 500
+_ALLERGY_ALIASES = {"nut": "nuts", "tree nut": "nuts", "tree nuts": "nuts", "tree-nuts": "nuts", "peanut": "peanuts",
+                    "groundnut": "peanuts", "wheat": "gluten", "milk": "dairy", "lactose": "dairy", "egg": "eggs",
+                    "seafood": "shellfish", "prawn": "shellfish", "prawns": "shellfish", "crab": "shellfish",
+                    "soya": "soy", "soybean": "soy"}
+_DIETARY_ALIASES = {"vegetarian": "veg", "pure veg": "veg", "pure-veg": "veg", "no": "none", "": "none"}
 _CODE_ALPHABET = "ABCDEFGHJKMNPQRSTUVWXYZ23456789"
 _ZONE_ALIASES = {"counter": "bar", "pdr": "private", "private room": "private", "private dining": "private",
                  "terrace": "rooftop", "roof": "rooftop", "roof top": "rooftop", "outdoor": "patio",
@@ -86,6 +97,47 @@ def normalize_zone(zone: str | None) -> str | None:
     return z
 
 
+def normalize_allergies(value: list[str] | str | None) -> list[str]:
+    """Lowercase, de-duplicate and validate allergies (accepts a comma-separated string too)."""
+    if value is None:
+        return []
+    items = value.split(",") if isinstance(value, str) else list(value)
+    out: list[str] = []
+    for item in items:
+        a = str(item).strip().lower()
+        if not a or a in ("none", "no", "n/a"):
+            continue
+        a = _ALLERGY_ALIASES.get(a, a)
+        if a not in ALLERGENS:
+            raise BookingError(f"Unknown allergy '{item}'. Choose from: {', '.join(ALLERGENS)}.", 422)
+        if a not in out:
+            out.append(a)
+    return out
+
+
+def _choice(value: str | None, allowed: tuple[str, ...], label: str, aliases: dict[str, str] | None = None) -> str:
+    v = (value or "none").strip().lower()
+    v = (aliases or {}).get(v, v)
+    if v not in allowed:
+        raise BookingError(f"Unknown {label} '{value}'. Choose one of: {', '.join(allowed)}.", 422)
+    return v
+
+
+def normalize_dietary(value: str | None) -> str:
+    return _choice(value, DIETARY, "dietary requirement", _DIETARY_ALIASES)
+
+
+def normalize_occasion(value: str | None) -> str:
+    return _choice(value, OCCASIONS, "occasion")
+
+
+def normalize_special_requests(value: str | None) -> str | None:
+    v = (value or "").strip()
+    if len(v) > MAX_SPECIAL_REQUESTS:
+        raise BookingError(f"Special requests are limited to {MAX_SPECIAL_REQUESTS} characters.", 422)
+    return v or None
+
+
 def _hhmm(value: str) -> time:
     return datetime.strptime(value, "%H:%M").time()
 
@@ -130,6 +182,10 @@ def booking_to_dict(b: Booking, table: Table | None = None, restaurant: Restaura
         "status": b.status,
         "source": b.source,
         "notes": b.notes,
+        "allergies": list(b.allergies or []),
+        "dietary": b.dietary or "none",
+        "occasion": b.occasion or "none",
+        "special_requests": b.special_requests,
         "created_at": b.created_at.isoformat(timespec="seconds"),
     }
 
@@ -192,11 +248,11 @@ def _overlaps(b: Booking, start: datetime, end: datetime) -> bool:
 
 
 def _day_context(session, r: Restaurant, d: date) -> tuple[list[Table], list[Booking]]:
-    """Active tables + confirmed bookings around a service day (one query each)."""
+    """Active tables + table-holding (confirmed/seated) bookings around a service day (one query each)."""
     tables = session.exec(select(Table).where(Table.restaurant_id == r.id, Table.is_active == True)).all()
     day_start = datetime.combine(d, time(0, 0))
     bookings = session.exec(
-        select(Booking).where(Booking.restaurant_id == r.id, Booking.status == "confirmed",
+        select(Booking).where(Booking.restaurant_id == r.id, Booking.status.in_(ACTIVE_STATUSES),
                               Booking.start_time >= day_start - timedelta(hours=6),
                               Booking.start_time < day_start + timedelta(days=1, hours=6))
     ).all()
@@ -345,9 +401,12 @@ def _new_code(session, prefix: str) -> str:
 def create_booking(restaurant_slug: str, guest_name: str, party_size: int, start_time: str | datetime,
                    phone: str | None = None, email: str | None = None, notes: str | None = None,
                    zone: str | None = None, table_id: int | None = None, duration_min: int = DEFAULT_DURATION,
-                   source: str = "web") -> dict[str, Any]:
+                   source: str = "web", allergies: list[str] | str | None = None, dietary: str | None = None,
+                   occasion: str | None = None, special_requests: str | None = None) -> dict[str, Any]:
     if not guest_name or not guest_name.strip():
         raise BookingError("A guest name is required.")
+    extras = {"allergies": normalize_allergies(allergies), "dietary": normalize_dietary(dietary),
+              "occasion": normalize_occasion(occasion), "special_requests": normalize_special_requests(special_requests)}
     src = (source or "web").strip().lower()
     if src not in SOURCES:
         raise BookingError(f"Unknown source '{source}'. Use one of: {', '.join(SOURCES)}.")
@@ -369,7 +428,8 @@ def create_booking(restaurant_slug: str, guest_name: str, party_size: int, start
             chosen = free[0]
         booking = Booking(code=_new_code(s, r.code_prefix), restaurant_id=r.id, guest_name=guest_name.strip(),
                           phone=phone or None, email=email or None, party_size=party_size, start_time=start,
-                          duration_min=duration_min, table_id=chosen.id, notes=notes or None, source=src)
+                          duration_min=duration_min, table_id=chosen.id, notes=notes or None, source=src,
+                          **extras)
         s.add(booking)
         s.commit()
         s.refresh(booking)
@@ -395,15 +455,26 @@ def get_booking(code: str, restaurant_slug: str | None = None) -> dict[str, Any]
 def modify_booking(code: str, start_time: str | datetime | None = None, party_size: int | None = None,
                    notes: str | None = None, guest_name: str | None = None, phone: str | None = None,
                    email: str | None = None, zone: str | None = None,
-                   restaurant_slug: str | None = None) -> dict[str, Any]:
+                   restaurant_slug: str | None = None, status: str | None = None,
+                   allergies: list[str] | str | None = None, dietary: str | None = None,
+                   occasion: str | None = None, special_requests: str | None = None) -> dict[str, Any]:
+    """Update details and/or status. Cancelled bookings are final (409). Rescheduling (time, party, zone) needs a
+    confirmed booking; moving a completed/no-show booking back to confirmed/seated re-checks its table is free."""
+    new_status = status.strip().lower() if status else None
+    if new_status and new_status not in STATUSES:
+        raise BookingError(f"Unknown status '{status}'. Use one of: {', '.join(STATUSES)}.", 422)
     with get_session() as s:
         b, r = _get(s, code, restaurant_slug)
-        if b.status != "confirmed":
+        if b.status == "cancelled":
             raise BookingError(f"Booking {b.code} is cancelled and can't be modified.", 409)
         new_start = parse_datetime(start_time) if start_time else b.start_time
         new_party = party_size or b.party_size
         z = _check_zone(s, r, zone)
-        if start_time or party_size or z:
+        reschedule = bool(start_time or party_size or z)
+        if reschedule and (new_status or b.status) != "confirmed":
+            raise BookingError(f"Booking {b.code} is {new_status or b.status}; only confirmed bookings can be "
+                               "rescheduled.", 409)
+        if reschedule:
             _validate_slot(r, new_start, new_party)
             free = _free_tables(s, r, new_start, b.duration_min, new_party, z, exclude_booking_id=b.id)
             if not free:
@@ -412,6 +483,22 @@ def modify_booking(code: str, start_time: str | datetime | None = None, party_si
             current = next((t for t in free if t.id == b.table_id), None)
             b.table_id = (current or free[0]).id
             b.start_time, b.party_size = new_start, new_party
+        elif new_status in ACTIVE_STATUSES and b.status not in ACTIVE_STATUSES:
+            free = _free_tables(s, r, b.start_time, b.duration_min, b.party_size, exclude_booking_id=b.id)
+            if not any(t.id == b.table_id for t in free):
+                raise BookingError(f"The table for booking {b.code} has since been taken; it can't be reactivated.",
+                                   409)
+        if allergies is not None:
+            b.allergies = normalize_allergies(allergies)
+        if dietary is not None:
+            b.dietary = normalize_dietary(dietary)
+        if occasion is not None:
+            b.occasion = normalize_occasion(occasion)
+        if special_requests is not None:
+            b.special_requests = normalize_special_requests(special_requests)
+        cancelled = new_status == "cancelled" and b.status != "cancelled"
+        if new_status:
+            b.status = new_status
         if notes is not None:
             b.notes = notes
         if guest_name:
@@ -423,6 +510,8 @@ def modify_booking(code: str, start_time: str | datetime | None = None, party_si
         s.add(b)
         s.commit()
         s.refresh(b)
+        if cancelled:
+            metrics.BOOKINGS_CANCELLED.labels(restaurant=r.slug).inc()
         return booking_to_dict(b, s.get(Table, b.table_id), r)
 
 

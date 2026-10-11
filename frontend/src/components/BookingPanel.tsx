@@ -3,7 +3,9 @@ import { AnimatePresence, motion } from 'framer-motion';
 import confetti from 'canvas-confetti';
 import { CircleAlert, LoaderCircle, Minus, Plus, RotateCcw } from 'lucide-react';
 import { Link } from 'react-router-dom';
-import type { Availability, Booking, BookingSource, Slot } from '../lib/types';
+import type { Allergy, Availability, Booking, BookingSource, Dietary, Occasion, Slot } from '../lib/types';
+import { ALLERGIES, DIETARY, OCCASIONS, allergyLabel } from '../lib/booking';
+import { OccasionIcon } from './BookingBits';
 import { ApiError, BOOKING_CHANGED, createBooking, errorMessage, getAvailability, notifyBookingsChanged } from '../lib/api';
 import { MONTHS, WEEKDAYS, formatDay, nextDays, parseISODate, toISODate } from '../lib/time';
 import { zoneLabel } from '../lib/zones';
@@ -292,7 +294,11 @@ export default function BookingPanel({ slug, restaurantName, initialDate, initia
   const [availError, setAvailError] = useState<string | null>(null);
   const [time, setTime] = useState<string | null>(initialTime && /^\d{2}:\d{2}$/.test(initialTime) ? initialTime : null);
   const [tableId, setTableId] = useState<number | null>(null);
-  const [form, setForm] = useState({ name: '', phone: '', email: '', notes: '' });
+  const [form, setForm] = useState({ name: '', phone: '', email: '', requests: '' });
+  const [allergies, setAllergies] = useState<Allergy[]>([]);
+  const [dietary, setDietary] = useState<Dietary>('none');
+  const [occasion, setOccasion] = useState<Occasion>('none');
+  const toggleAllergy = (a: Allergy) => setAllergies((xs) => (xs.includes(a) ? xs.filter((x) => x !== a) : [...xs, a]));
   const [touched, setTouched] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
@@ -377,11 +383,22 @@ export default function BookingPanel({ slug, restaurantName, initialDate, initia
         start_time: slot.start || `${date}T${slot.time}:00`,
         phone: form.phone.trim() || undefined,
         email: form.email.trim() || undefined,
-        notes: form.notes.trim() || undefined,
+        allergies,
+        dietary,
+        occasion,
+        special_requests: form.requests.trim().slice(0, 500) || undefined,
         table_id: table?.id,
         source,
       });
-      setBooking({ ...b, restaurant_name: b.restaurant_name ?? restaurantName, restaurant_slug: b.restaurant_slug ?? slug });
+      setBooking({
+        ...b,
+        restaurant_name: b.restaurant_name ?? restaurantName,
+        restaurant_slug: b.restaurant_slug ?? slug,
+        allergies: b.allergies ?? allergies,
+        dietary: b.dietary ?? dietary,
+        occasion: b.occasion ?? occasion,
+        special_requests: b.special_requests !== undefined ? b.special_requests : form.requests.trim() || null,
+      });
       celebrate();
       notifyBookingsChanged(b);
     } catch (err) {
@@ -397,7 +414,10 @@ export default function BookingPanel({ slug, restaurantName, initialDate, initia
     setTime(null);
     setTableId(null);
     setTouched(false);
-    setForm((f) => ({ ...f, notes: '' }));
+    setForm((f) => ({ ...f, requests: '' }));
+    setAllergies([]);
+    setDietary('none');
+    setOccasion('none');
   };
 
   return (
@@ -473,7 +493,72 @@ export default function BookingPanel({ slug, restaurantName, initialDate, initia
               </motion.div>
             ) : (
               <motion.form key="form" onSubmit={submit} initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0, y: -10 }} noValidate>
-                <Step n="05" title="Your details">
+                <Step n="05" title="Preferences" aside="Optional">
+                  <div className="grid grid-cols-1 gap-6 md:grid-cols-2">
+                    <fieldset className="min-w-0 md:col-span-2">
+                      <legend className="mb-2 block text-[13px] text-muted sm:text-xs">Allergies (select all that apply)</legend>
+                      <div className="flex flex-wrap gap-2">
+                        {ALLERGIES.map((a) => {
+                          const on = allergies.includes(a);
+                          return (
+                            <button
+                              key={a}
+                              type="button"
+                              aria-pressed={on}
+                              onClick={() => toggleAllergy(a)}
+                              className={`min-h-10 touch-manipulation rounded-full border px-4 py-1.5 text-sm transition ${on ? 'font-semibold' : 'border-line bg-glass text-fg hover:border-line-strong'}`}
+                              style={on ? { color: 'var(--allergy)', borderColor: 'color-mix(in oklab, var(--allergy) 60%, transparent)', background: 'color-mix(in oklab, var(--allergy) 14%, transparent)' } : undefined}
+                            >
+                              {allergyLabel(a)}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </fieldset>
+                    <fieldset className="min-w-0">
+                      <legend className="mb-2 block text-[13px] text-muted sm:text-xs">Dietary</legend>
+                      <div className="flex flex-wrap gap-2" role="radiogroup">
+                        {DIETARY.map((d) => {
+                          const on = dietary === d.value;
+                          return (
+                            <button
+                              key={d.value}
+                              type="button"
+                              role="radio"
+                              aria-checked={on}
+                              onClick={() => setDietary(d.value)}
+                              className={`min-h-10 touch-manipulation rounded-full border px-4 py-1.5 text-sm transition ${on ? 'font-semibold' : 'border-line bg-glass text-fg hover:border-line-strong'}`}
+                              style={on ? { color: 'var(--diet)', borderColor: 'color-mix(in oklab, var(--diet) 60%, transparent)', background: 'color-mix(in oklab, var(--diet) 14%, transparent)' } : undefined}
+                            >
+                              {d.label}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </fieldset>
+                    <label className="block min-w-0">
+                      <span className="mb-2 flex items-center gap-1.5 text-[13px] text-muted sm:text-xs">
+                        <OccasionIcon occasion={occasion} className="h-3.5 w-3.5" /> Occasion
+                      </span>
+                      <select className="field text-base [&>option]:bg-[var(--bg-elev)]" value={occasion} onChange={(e) => setOccasion(e.target.value as Occasion)}>
+                        {OCCASIONS.map((o) => (
+                          <option key={o.value} value={o.value}>
+                            {o.label}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                    <label className="block min-w-0 md:col-span-2">
+                      <span className="mb-1.5 flex justify-between text-[13px] text-muted sm:text-xs">
+                        <span>Special requests</span>
+                        <span className="text-faint">{form.requests.length}/500</span>
+                      </span>
+                      <textarea className="field min-h-24 resize-y text-base" maxLength={500} value={form.requests} onChange={(e) => setForm({ ...form, requests: e.target.value })} placeholder="High chair, quiet corner, a candle on the dessert…" />
+                    </label>
+                  </div>
+                </Step>
+                <div className="mt-8 sm:mt-10" />
+                <Step n="06" title="Your details">
                   <div className="grid grid-cols-1 gap-6 sm:gap-8 md:grid-cols-[minmax(0,1fr)_300px]">
                     <div className="grid min-w-0 grid-cols-1 gap-4 sm:grid-cols-2">
                       <label className="block sm:col-span-2">
@@ -489,10 +574,6 @@ export default function BookingPanel({ slug, restaurantName, initialDate, initia
                         <span className="mb-1.5 block text-[13px] text-muted sm:text-xs">Email</span>
                         <input className="field text-base" type="email" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} placeholder="ananya@example.com" autoComplete="email" inputMode="email" autoCapitalize="off" spellCheck={false} />
                       </label>
-                      <label className="block sm:col-span-2">
-                        <span className="mb-1.5 block text-[13px] text-muted sm:text-xs">Notes</span>
-                        <textarea className="field min-h-24 resize-y text-base" value={form.notes} onChange={(e) => setForm({ ...form, notes: e.target.value })} placeholder="Allergies, celebrations, seating wishes…" />
-                      </label>
                     </div>
                     <div className="glass-soft flex min-w-0 flex-col rounded-3xl p-4 sm:p-5">
                       <p className="text-[11px] font-semibold uppercase tracking-[0.28em] text-faint sm:text-[10px]">Your evening</p>
@@ -502,6 +583,9 @@ export default function BookingPanel({ slug, restaurantName, initialDate, initia
                           ['Time', time ?? '—'],
                           ['Guests', String(party)],
                           ['Table', table ? `${table.name} · ${zoneLabel(table.zone)}` : '—'],
+                          ...(allergies.length ? [['Allergies', allergies.map(allergyLabel).join(', ')]] : []),
+                          ...(dietary !== 'none' ? [['Dietary', DIETARY.find((d) => d.value === dietary)?.label ?? dietary]] : []),
+                          ...(occasion !== 'none' ? [['Occasion', OCCASIONS.find((o) => o.value === occasion)?.label ?? occasion]] : []),
                         ].map(([k, v]) => (
                           <div key={k} className="flex justify-between gap-3">
                             <dt className="text-muted">{k}</dt>

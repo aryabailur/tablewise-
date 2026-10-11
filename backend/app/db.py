@@ -9,7 +9,7 @@ import os
 from datetime import datetime
 from pathlib import Path
 
-from sqlalchemy import JSON, Column, DateTime, Text, UniqueConstraint, inspect
+from sqlalchemy import JSON, Column, DateTime, Text, UniqueConstraint, inspect, text
 from sqlmodel import Field, Session, SQLModel, create_engine
 
 DATA_DIR = Path(__file__).resolve().parent.parent / "data"
@@ -67,9 +67,14 @@ class Booking(SQLModel, table=True):
     start_time: datetime = Field(index=True, sa_type=DateTime)  # naive local (Asia/Kolkata) time
     duration_min: int = 90
     table_id: int = Field(foreign_key="table.id")
-    status: str = Field(default="confirmed", index=True)  # confirmed | cancelled
+    status: str = Field(default="confirmed", index=True)  # confirmed | seated | completed | no_show | cancelled
     source: str = Field(default="web", index=True)  # web | chat | mcp | google | phone
     notes: str | None = None
+    allergies: list[str] = Field(default_factory=list,
+                                 sa_column=Column(JSON, nullable=False, server_default=text("'[]'")))
+    dietary: str = Field(default="none", sa_column_kwargs={"server_default": "none"})  # veg|vegan|jain|halal|none
+    occasion: str = Field(default="none", sa_column_kwargs={"server_default": "none"})  # birthday|anniversary|...
+    special_requests: str | None = None
     created_at: datetime = Field(default_factory=datetime.now, sa_type=DateTime)
 
 
@@ -92,10 +97,36 @@ def _schema_outdated() -> bool:
     return "restaurant_id" not in {c["name"] for c in insp.get_columns("booking")}
 
 
-def init_db(reset: bool = False) -> None:
+# Columns added after v2, with portable DDL (SQLite + Postgres). Existing rows get the defaults.
+BOOKING_MIGRATIONS: dict[str, str] = {
+    "allergies": "JSON NOT NULL DEFAULT '[]'",
+    "dietary": "VARCHAR NOT NULL DEFAULT 'none'",
+    "occasion": "VARCHAR NOT NULL DEFAULT 'none'",
+    "special_requests": "VARCHAR",
+}
+
+
+def migrate_db() -> list[str]:
+    """Add any missing booking columns in place (ALTER TABLE ... ADD COLUMN). Returns the columns added."""
+    insp = inspect(engine)
+    if not insp.has_table("booking"):
+        return []
+    existing = {c["name"] for c in insp.get_columns("booking")}
+    missing = [name for name in BOOKING_MIGRATIONS if name not in existing]
+    if missing:
+        with engine.begin() as conn:
+            for name in missing:
+                conn.execute(text(f"ALTER TABLE booking ADD COLUMN {name} {BOOKING_MIGRATIONS[name]}"))
+    return missing
+
+
+def init_db(reset: bool = False) -> list[str]:
+    """Create the schema. Pre-multi-restaurant DBs (or reset=True) are dropped and recreated; v2 DBs are migrated in
+    place. Returns the booking columns that were added by the migration."""
     if reset or _schema_outdated():
         SQLModel.metadata.drop_all(engine)
     SQLModel.metadata.create_all(engine)
+    return migrate_db()
 
 
 def get_session() -> Session:

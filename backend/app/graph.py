@@ -28,8 +28,8 @@ from langgraph.graph.message import add_messages
 from langgraph.prebuilt import InjectedState, ToolNode
 from pydantic import BaseModel, Field
 
+from . import allergens, metrics, rag
 from . import booking_service as bs
-from . import metrics, rag
 from .seed import RESTAURANTS as _SEED_RESTAURANTS
 
 _BACKEND = Path(__file__).resolve().parent.parent
@@ -183,14 +183,22 @@ def check_availability(date: str, party_size: int, state: Annotated[dict, Inject
 @tool
 def create_booking(guest_name: str, party_size: int, date: str, time: str, state: Annotated[dict, InjectedState],
                    phone: str | None = None, email: str | None = None, zone: str | None = None,
-                   notes: str | None = None, restaurant_slug: str | None = None) -> str:
+                   notes: str | None = None, restaurant_slug: str | None = None, allergies: list[str] | None = None,
+                   dietary: str | None = None, occasion: str | None = None,
+                   special_requests: str | None = None) -> str:
     """Create a confirmed reservation. ONLY call after the guest has explicitly confirmed the recap.
     date: YYYY-MM-DD, time: HH:MM (24h). Provide phone or email. zone: optional seating zone.
-    notes: allergies, occasions, requests (optional). restaurant_slug: defaults to the currently selected one."""
+    restaurant_slug: defaults to the currently selected one.
+    allergies: list of any of nuts, peanuts, gluten, dairy, shellfish, fish, eggs, soy, sesame.
+    dietary: veg | vegan | jain | halal | none. occasion: birthday | anniversary | business | date | none.
+    special_requests: free text such as "cake at dessert" (max 500 chars). notes: anything else.
+    When allergies are given the result includes allergy_check.avoid - dishes on that restaurant's menu to avoid -
+    which you must name to the guest."""
     try:
-        return json.dumps(bs.create_booking(_slug(restaurant_slug, state), guest_name=guest_name,
-                                            party_size=party_size, start_time=bs.combine(date, time), phone=phone,
-                                            email=email, zone=zone, notes=notes, source="chat"))
+        return json.dumps(allergens.attach_allergy_check(bs.create_booking(
+            _slug(restaurant_slug, state), guest_name=guest_name, party_size=party_size,
+            start_time=bs.combine(date, time), phone=phone, email=email, zone=zone, notes=notes, source="chat",
+            allergies=allergies, dietary=dietary, occasion=occasion, special_requests=special_requests)))
     except Exception as e:
         return _err(e)
 
@@ -198,18 +206,35 @@ def create_booking(guest_name: str, party_size: int, date: str, time: str, state
 @tool
 def modify_booking(code: str, state: Annotated[dict, InjectedState], date: str | None = None,
                    time: str | None = None, party_size: int | None = None, zone: str | None = None,
-                   notes: str | None = None, restaurant_slug: str | None = None) -> str:
+                   notes: str | None = None, restaurant_slug: str | None = None, allergies: list[str] | None = None,
+                   dietary: str | None = None, occasion: str | None = None,
+                   special_requests: str | None = None) -> str:
     """Change an existing booking identified by its code (e.g. EMB-7K2P). Any of date (YYYY-MM-DD), time (HH:MM),
-    party_size, zone, notes may be changed; omitted fields keep their current value. restaurant_slug is optional
-    (the code identifies the restaurant)."""
+    party_size, zone, notes, allergies (replaces the list; values as in create_booking), dietary, occasion,
+    special_requests may be changed; omitted fields keep their current value. restaurant_slug is optional (the code
+    identifies the restaurant). With allergies the result includes allergy_check.avoid - name those dishes."""
     try:
         slug = resolve_restaurant(restaurant_slug) if restaurant_slug else None
         start = None
         if date or time:
             cur = datetime.fromisoformat(bs.get_booking(code, slug)["start_time"])
             start = bs.combine(date or cur.date().isoformat(), time or cur.strftime("%H:%M"))
-        return json.dumps(bs.modify_booking(code, start_time=start, party_size=party_size, zone=zone, notes=notes,
-                                            restaurant_slug=slug))
+        return json.dumps(allergens.attach_allergy_check(bs.modify_booking(
+            code, start_time=start, party_size=party_size, zone=zone, notes=notes, restaurant_slug=slug,
+            allergies=allergies, dietary=dietary, occasion=occasion, special_requests=special_requests)))
+    except Exception as e:
+        return _err(e)
+
+
+@tool
+def check_menu_allergens(allergies: list[str], state: Annotated[dict, InjectedState],
+                         restaurant_slug: str | None = None) -> str:
+    """Cross-check the guest's allergies against one restaurant's menu (menu.md) and list the dishes to avoid.
+    allergies: any of nuts, peanuts, gluten, dairy, shellfish, fish, eggs, soy, sesame.
+    restaurant_slug: defaults to the currently selected one. Use it before the booking recap when allergies come up."""
+    try:
+        check = allergens.allergy_check(_slug(restaurant_slug, state), bs.normalize_allergies(allergies))
+        return json.dumps(check or {"allergies": [], "avoid": {}, "note": "No allergies to check."})
     except Exception as e:
         return _err(e)
 
@@ -227,12 +252,14 @@ def cancel_booking(code: str, state: Annotated[dict, InjectedState], restaurant_
 def lookup_booking(code: str, state: Annotated[dict, InjectedState], restaurant_slug: str | None = None) -> str:
     """Look up a booking by its code (e.g. EMB-7K2P) to see its details, restaurant and status."""
     try:
-        return json.dumps(bs.get_booking(code, resolve_restaurant(restaurant_slug) if restaurant_slug else None))
+        return json.dumps(allergens.attach_allergy_check(
+            bs.get_booking(code, resolve_restaurant(restaurant_slug) if restaurant_slug else None)))
     except Exception as e:
         return _err(e)
 
 
-TOOLS = [search_restaurants, check_availability, create_booking, modify_booking, cancel_booking, lookup_booking]
+TOOLS = [search_restaurants, check_availability, create_booking, modify_booking, cancel_booking, lookup_booking,
+         check_menu_allergens]
 BOOKING_ACTIONS = {"create_booking": "created", "modify_booking": "modified", "cancel_booking": "cancelled"}
 _CODE_RE = re.compile(r"\b[A-Z]{2,3}-[A-Z0-9]{4}\b")
 
@@ -402,14 +429,22 @@ which restaurant they want before checking availability or booking - never guess
 3. Resolve relative dates and times ("tomorrow at 8" -> tomorrow's YYYY-MM-DD, 20:00) from the current date. \
 Dinner times without am/pm mean pm.
 4. Call check_availability before offering a time. If the requested time is taken, offer the nearest alternatives.
-5. To book you need: restaurant, party size, date, time, the guest's name, and a phone number or email. Zone and \
-notes (allergies, occasion) are optional.
-6. BEFORE calling create_booking, recap every detail (restaurant, name, party size, weekday + date, time, zone, \
-contact, notes) and ask the guest to confirm. Only call create_booking after the guest explicitly confirms in a \
-later message - even if they gave every detail up front. Pass date as YYYY-MM-DD and time as HH:MM separately.
-7. For changes or cancellations, get the booking code (e.g. EMB-7K2P), call lookup_booking, then modify_booking or \
+5. To book you need: restaurant, party size, date, time, the guest's name, and a phone number or email. Zone, \
+occasion and special requests are optional.
+6. Once you have those details and BEFORE the recap, ask exactly: "Any allergies or dietary requirements?" (you may \
+also ask whether it's a special occasion) unless the guest already told you. Map answers to allergies (nuts, \
+peanuts, gluten, dairy, shellfish, fish, eggs, soy, sesame), dietary (veg, vegan, jain, halal, none) and occasion \
+(birthday, anniversary, business, date, none); anything else goes in special_requests. If the guest has allergies, \
+call check_menu_allergens for that restaurant and name the dishes to avoid.
+7. BEFORE calling create_booking, recap every detail (restaurant, name, party size, weekday + date, time, zone, \
+contact, allergies, dietary, occasion, special requests) and ask the guest to confirm. Only call create_booking \
+after the guest explicitly confirms in a later message - even if they gave every detail up front. Pass date as \
+YYYY-MM-DD and time as HH:MM separately, and pass allergies/dietary/occasion/special_requests as their own arguments \
+(also to modify_booking when they change).
+8. For changes or cancellations, get the booking code (e.g. EMB-7K2P), call lookup_booking, then modify_booking or \
 cancel_booking. A direct request to cancel a specific code counts as confirmation.
-8. After a successful booking, give the booking code in bold and mention the restaurant's cancellation policy.
+9. After a successful booking, give the booking code in bold and mention the restaurant's cancellation policy. \
+If the result has allergy_check, name the dishes listed in allergy_check.avoid so the guest knows what to skip.
 Never invent restaurants, availability, tables or booking codes - only state what tools return. Speak in 12-hour \
 times (8:00 pm). Keep replies short and elegant; use bold sparingly for key details.
 
@@ -533,7 +568,13 @@ async def respond(state: AgentState) -> dict:
     writer({"type": "node", "node": "respond", "status": "start"})
     intent = state.get("intent")
     if intent in ("booking", "discover"):
-        return {}  # booking_agent already wrote (and streamed) the guest-facing reply, grounded in the same docs
+        # booking_agent already wrote (and streamed) the guest-facing reply, grounded in the same docs. If a booking
+        # with allergies came back this turn and the reply didn't name the dishes to avoid, add the menu check.
+        note = allergy_followup(state.get("tool_results") or [], _last_ai_text(state["messages"]))
+        if not note:
+            return {}
+        _write_tokens(writer, "\n\n" + note)
+        return {"messages": [AIMessage(content=note)]}
     docs = state.get("retrieved_docs") or []
     current = state.get("current_restaurant")
     if not LLM_ENABLED:
@@ -557,6 +598,33 @@ async def respond(state: AgentState) -> dict:
                                        docs=_format_docs(docs))
     msg = await _llm(1200).ainvoke([SystemMessage(content=system)] + _text_history(state["messages"]))
     return {"messages": [AIMessage(content=_text(msg.content), id=msg.id)]}
+
+
+def _last_ai_text(msgs: list[AnyMessage]) -> str:
+    for m in reversed(msgs):
+        if isinstance(m, HumanMessage):
+            break
+        if isinstance(m, AIMessage) and _text(m.content):
+            return _text(m.content)
+    return ""
+
+
+def allergy_followup(tool_results: list[dict], reply: str) -> str | None:
+    """Allergy note for the latest booking result (create/modify/lookup) with allergies, unless `reply` already
+    names every dish to avoid."""
+    for tr in reversed(tool_results):
+        res = tr.get("result")
+        if tr.get("name") not in ("create_booking", "modify_booking", "lookup_booking") or not isinstance(res, dict):
+            continue
+        check = res.get("allergy_check")
+        if not check:
+            return None
+        dishes = {d for ds in check.get("avoid", {}).values() for d in ds}
+        low = reply.lower()
+        if check["note"] in reply or (dishes and all(d.lower() in low for d in dishes)):
+            return None
+        return check["note"]
+    return None
 
 
 # ====================================================================== offline mode (no API key)
@@ -621,6 +689,8 @@ def _offline_summary(results: list[dict]) -> str:
             lines.append(f"Booking **{r['code']}** at {r.get('restaurant_name')} for {r['guest_name']} "
                          f"({r['party_size']} guests) on {r['start_time'].replace('T', ' at ')[:16]} at table "
                          f"{r['table_name']} is **{r['status']}**.")
+            if r.get("allergy_check"):
+                lines.append(r["allergy_check"]["note"])
         elif "available_times" in r:
             where = r.get("restaurant_name") or ""
             if r.get("requested_time"):

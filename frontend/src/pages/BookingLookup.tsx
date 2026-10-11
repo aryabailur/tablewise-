@@ -10,6 +10,8 @@ import { zoneLabel } from '../lib/zones';
 import { useDocumentTitle } from '../lib/jsonld';
 import { nameFromSlug } from '../lib/restaurants';
 import { restaurantLink } from '../lib/links';
+import { statusOf } from '../lib/booking';
+import { StatusPill } from '../components/BookingBits';
 
 const CODE_RE = /^[A-Z]{2,4}-[A-Z0-9]{3,6}$/;
 const normalise = (s: string) => s.trim().toUpperCase().replace(/\s+/g, '');
@@ -103,7 +105,7 @@ export default function BookingLookup() {
   };
 
   const restaurantName = booking ? booking.restaurant_name ?? (booking.restaurant_slug ? nameFromSlug(booking.restaurant_slug) : 'Tablewise') : '';
-  const upcoming = booking ? booking.status !== 'cancelled' && parseLocal(booking.start_time) > new Date() : false;
+  const upcoming = booking ? statusOf(booking) === 'confirmed' && parseLocal(booking.start_time) > new Date() : false;
 
   return (
     <section className="mx-auto max-w-3xl px-4 pb-28 pt-32 sm:px-6 sm:pt-36">
@@ -139,12 +141,12 @@ export default function BookingLookup() {
                   ['When', `${formatDay(booking.start_time.slice(0, 10))} · ${hhmm(booking.start_time)}`],
                   ['Party', `${booking.party_size} ${booking.party_size === 1 ? 'guest' : 'guests'}`],
                   ['Table', booking.table_name ? `${booking.table_name} · ${zoneLabel(booking.zone)}` : '—'],
-                  ['Status', booking.status === 'cancelled' ? 'Cancelled' : 'Confirmed'],
+                  ['Status', <StatusPill key="s" status={statusOf(booking)} />],
                   ['Name', booking.guest_name],
                 ].map(([k, v]) => (
-                  <div key={k} className="min-w-0">
+                  <div key={String(k)} className="min-w-0">
                     <dt className="text-[10px] uppercase tracking-[0.22em] text-faint">{k}</dt>
-                    <dd className={`mt-0.5 break-words ${k === 'Status' && booking.status === 'cancelled' ? 'text-danger' : ''}`}>{v}</dd>
+                    <dd className="mt-0.5 break-words">{v}</dd>
                   </div>
                 ))}
               </dl>
@@ -159,7 +161,7 @@ export default function BookingLookup() {
                     View {restaurantName}
                   </Link>
                 )}
-                {booking.status !== 'cancelled' && (
+                {statusOf(booking) === 'confirmed' && (
                   <button
                     type="button"
                     disabled={cancelling}

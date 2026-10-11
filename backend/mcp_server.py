@@ -19,8 +19,8 @@ try:  # mcp 1.x
 except ImportError:  # mcp 2.x renamed FastMCP -> MCPServer
     from mcp.server.mcpserver import MCPServer as FastMCP
 
+from app import allergens, rag
 from app import booking_service as bs
-from app import rag
 from app.seed import ensure_seeded
 
 ensure_seeded()
@@ -74,15 +74,21 @@ def check_availability(date: str, party_size: int, time: str | None = None, zone
 @mcp.tool()
 def create_booking(guest_name: str, party_size: int, date: str, time: str, phone: str | None = None,
                    email: str | None = None, zone: str | None = None, notes: str | None = None,
-                   restaurant_slug: str = DEFAULT) -> dict:
+                   restaurant_slug: str = DEFAULT, allergies: list[str] | None = None, dietary: str | None = None,
+                   occasion: str | None = None, special_requests: str | None = None) -> dict:
     """Create a reservation (confirm details with the guest first). date YYYY-MM-DD, time HH:MM (24h).
-    Returns the booking including its code (e.g. EMB-7K2P). restaurant_slug defaults to ember-vine."""
+    allergies: any of nuts, peanuts, gluten, dairy, shellfish, fish, eggs, soy, sesame.
+    dietary: veg|vegan|jain|halal|none. occasion: birthday|anniversary|business|date|none.
+    special_requests: free text (max 500). Returns the booking including its code (e.g. EMB-7K2P) and, when
+    allergies are given, allergy_check listing menu dishes to avoid. restaurant_slug defaults to ember-vine."""
     try:
         start = bs.combine(date, time)
     except bs.BookingError as e:
         return {"error": e.message}
-    return _safe(bs.create_booking, restaurant_slug, guest_name=guest_name, party_size=party_size, start_time=start,
-                 phone=phone, email=email, zone=zone, notes=notes, source="mcp")
+    return allergens.attach_allergy_check(_safe(
+        bs.create_booking, restaurant_slug, guest_name=guest_name, party_size=party_size, start_time=start,
+        phone=phone, email=email, zone=zone, notes=notes, source="mcp", allergies=allergies, dietary=dietary,
+        occasion=occasion, special_requests=special_requests))
 
 
 @mcp.tool()
@@ -93,8 +99,12 @@ def get_booking(code: str, restaurant_slug: str | None = None) -> dict:
 
 @mcp.tool()
 def modify_booking(code: str, date: str | None = None, time: str | None = None, party_size: int | None = None,
-                   zone: str | None = None, notes: str | None = None, restaurant_slug: str | None = None) -> dict:
-    """Modify a booking. Omitted fields keep their current values. date YYYY-MM-DD, time HH:MM (24h)."""
+                   zone: str | None = None, notes: str | None = None, restaurant_slug: str | None = None,
+                   allergies: list[str] | None = None, dietary: str | None = None, occasion: str | None = None,
+                   special_requests: str | None = None, status: str | None = None) -> dict:
+    """Modify a booking. Omitted fields keep their current values. date YYYY-MM-DD, time HH:MM (24h).
+    allergies (replaces the list; [] clears), dietary, occasion and special_requests as in create_booking.
+    status: confirmed|seated|completed|no_show|cancelled (cancelled bookings can't be changed)."""
     start = None
     if date or time:
         current = _safe(bs.get_booking, code, restaurant_slug)
@@ -105,8 +115,10 @@ def modify_booking(code: str, date: str | None = None, time: str | None = None, 
             start = bs.combine(date or d, time or t[:5])
         except bs.BookingError as e:
             return {"error": e.message}
-    return _safe(bs.modify_booking, code, start_time=start, party_size=party_size, zone=zone, notes=notes,
-                 restaurant_slug=restaurant_slug)
+    return allergens.attach_allergy_check(_safe(
+        bs.modify_booking, code, start_time=start, party_size=party_size, zone=zone, notes=notes,
+        restaurant_slug=restaurant_slug, allergies=allergies, dietary=dietary, occasion=occasion,
+        special_requests=special_requests, status=status))
 
 
 @mcp.tool()

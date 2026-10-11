@@ -1,6 +1,8 @@
 """Seed the 6 Mumbai restaurants, their tables, demo bookings, and ingest the knowledge base.
 
-Run: python -m app.seed  (from /backend). This is also the "migration": drop_all + create_all + reseed.
+Run: python -m app.seed  (from /backend) for a full reset: drop_all + create_all + reseed.
+On normal startup (ensure_seeded) an existing database is migrated in place instead (db.migrate_db); when that adds
+the guest-detail columns, existing bookings are back-filled with demo allergies/dietary/occasion details.
 """
 from __future__ import annotations
 
@@ -10,7 +12,7 @@ from datetime import date, datetime, timedelta
 from sqlmodel import select
 
 from . import booking_service, rag
-from .db import Restaurant, Table, get_session, init_db
+from .db import Booking, Restaurant, Table, get_session, init_db
 
 RESTAURANTS: list[dict] = [
     {"slug": "ember-vine", "name": "Ember & Vine", "code_prefix": "EMB", "cuisine": ["Wood-fire", "Modern European"],
@@ -73,8 +75,23 @@ DEMO_GUESTS = ["Aarav Mehta", "Ananya Iyer", "Rohan Desai", "Priya Nair", "Kabir
                "Vikram Rao", "Meera Kulkarni", "Arjun Kapoor", "Sana Sheikh", "Neha Joshi", "Dev Patel",
                "Zara Fernandes", "Aditya Menon", "Tara Banerjee", "Farhan Qureshi"]
 SOURCES = ["web", "web", "web", "chat", "chat", "mcp", "google", "google", "phone"]
-NOTES = [None, None, None, "Anniversary", "Window if possible", "Nut allergy", "Birthday", "High chair please",
-         "Jain food preference"]
+NOTES = [None, None, None, None, "Window if possible", "High chair please", "Running 10 minutes late is likely"]
+# Guest details for ~40% of demo bookings: (allergies, dietary, occasion, special_requests)
+GUEST_PROFILES: list[tuple[list[str], str, str, str | None]] = [
+    (["nuts"], "none", "birthday", "Birthday cake with dessert, please - nut-free"),
+    (["shellfish"], "none", "anniversary", "A quiet corner table if possible"),
+    (["gluten"], "none", "business", None),
+    ([], "vegan", "date", "Window seat if possible"),
+    (["dairy", "eggs"], "veg", "none", None),
+    ([], "jain", "none", "No onion, garlic or root vegetables"),
+    (["peanuts", "sesame"], "none", "birthday", "Candle on the dessert"),
+    ([], "halal", "business", "Need to leave by 9:30 pm"),
+    (["fish"], "veg", "anniversary", "Rose petals on the table, please"),
+    (["soy"], "none", "date", None),
+    ([], "veg", "birthday", "Surprise for our daughter - please don't mention it on arrival"),
+    (["dairy"], "none", "none", "Wheelchair access needed"),
+]
+DETAIL_RATE = 0.4
 BOOKINGS_PER_RESTAURANT = 15
 
 
@@ -103,6 +120,30 @@ def seed_tables() -> int:
     return made
 
 
+def _guest_details(rng: random.Random) -> dict:
+    if rng.random() >= DETAIL_RATE:
+        return {}
+    allergies, dietary, occasion, special = rng.choice(GUEST_PROFILES)
+    return {"allergies": list(allergies), "dietary": dietary, "occasion": occasion, "special_requests": special}
+
+
+def backfill_guest_details(seed: int = 7) -> int:
+    """Give ~40% of bookings that have no guest details yet some demo details (used right after migrating)."""
+    rng, made = random.Random(seed), 0
+    with get_session() as s:
+        for b in s.exec(select(Booking).order_by(Booking.id)).all():
+            if b.allergies or (b.dietary or "none") != "none" or (b.occasion or "none") != "none" or b.special_requests:
+                continue
+            details = _guest_details(rng)
+            if details:
+                for key, value in details.items():
+                    setattr(b, key, value)
+                s.add(b)
+                made += 1
+        s.commit()
+    return made
+
+
 def seed_demo_bookings(per_restaurant: int = BOOKINGS_PER_RESTAURANT, seed: int = 42) -> int:
     """Spread realistic bookings over today + the next 6 days so the UI and dashboards have texture."""
     rng = random.Random(seed)
@@ -123,7 +164,7 @@ def seed_demo_bookings(per_restaurant: int = BOOKINGS_PER_RESTAURANT, seed: int 
                 booking_service.create_booking(
                     r.slug, guest_name=rng.choice(DEMO_GUESTS), party_size=rng.choice([2, 2, 2, 3, 4, 4, 5, 6]),
                     start_time=start, phone=f"+91 98{rng.randint(10, 99)} {rng.randint(100000, 999999)}",
-                    notes=rng.choice(NOTES), source=rng.choice(SOURCES))
+                    notes=rng.choice(NOTES), source=rng.choice(SOURCES), **_guest_details(rng))
                 count += 1
             except booking_service.BookingError:
                 continue
@@ -133,12 +174,14 @@ def seed_demo_bookings(per_restaurant: int = BOOKINGS_PER_RESTAURANT, seed: int 
 
 def ensure_seeded() -> None:
     """Startup hook: create schema and seed when the database is empty (never wipes existing data)."""
-    init_db()
+    added = init_db()
     with get_session() as s:
         empty = s.exec(select(Restaurant)).first() is None
     seed_tables()
     if empty:
         seed_demo_bookings()
+    elif "allergies" in added:  # v2 database just migrated in place: give existing demo bookings some texture
+        backfill_guest_details()
 
 
 def main() -> None:

@@ -1,4 +1,4 @@
-import type { Availability, Booking, BookingCreate, ChatEvent, Health, RestaurantDetail, RestaurantListItem, Table } from './types';
+import type { Availability, Booking, BookingCreate, BookingPatch, ChatEvent, Health, RestaurantDetail, RestaurantListItem, Table } from './types';
 
 export class ApiError extends Error {
   status: number;
@@ -66,6 +66,7 @@ export const getAvailability = (slug: string, date: string, party: number) =>
   request<Availability>(`/api/restaurants/${enc(slug)}/availability${qs({ date, party_size: party })}`);
 export const createBooking = (slug: string, b: BookingCreate) => request<Booking>(`/api/restaurants/${enc(slug)}/bookings`, { method: 'POST', body: b });
 export const getBooking = (code: string) => request<Booking>(`/api/bookings/${enc(code)}`);
+export const updateBooking = (code: string, patch: BookingPatch) => request<Booking>(`/api/bookings/${enc(code)}`, { method: 'PATCH', body: patch });
 export const cancelBooking = (code: string) => request<Booking>(`/api/bookings/${enc(code)}`, { method: 'DELETE' });
 export const listBookings = (date?: string, restaurant?: string) => request<Booking[]>(`/api/bookings${qs({ date, restaurant })}`);
 

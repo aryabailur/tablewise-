@@ -51,6 +51,10 @@ TAGS_PATTERN = r"^[A-Za-z0-9 ,-]*$"
 _PHONE = re.compile(r"\+?[0-9][0-9 ().-]{5,18}[0-9]")
 _EMAIL = re.compile(r"[^@\s]+@[^@\s]+\.[A-Za-z]{2,}")
 Source = Literal["web", "chat", "mcp", "google", "phone"]
+Allergen = Literal["nuts", "peanuts", "gluten", "dairy", "shellfish", "fish", "eggs", "soy", "sesame"]
+Dietary = Literal["veg", "vegan", "jain", "halal", "none"]
+Occasion = Literal["birthday", "anniversary", "business", "date", "none"]
+Status = Literal["confirmed", "seated", "completed", "no_show", "cancelled"]
 
 
 class ChatRequest(BaseModel):
@@ -62,10 +66,21 @@ class ChatRequest(BaseModel):
 class _BookingInput(BaseModel):
     """Shared validation for booking payloads: trimmed text, real-looking contacts, known zones."""
 
-    @field_validator("guest_name", "phone", "email", "notes", "zone", mode="before", check_fields=False)
+    @field_validator("guest_name", "phone", "email", "notes", "zone", "special_requests", mode="before",
+                     check_fields=False)
     @classmethod
     def _strip(cls, v):
         return v.strip() if isinstance(v, str) else v
+
+    @field_validator("allergies", mode="before", check_fields=False)
+    @classmethod
+    def _allergies_lower(cls, v):
+        return [a.strip().lower() if isinstance(a, str) else a for a in v] if isinstance(v, list) else v
+
+    @field_validator("allergies", check_fields=False)
+    @classmethod
+    def _allergies_unique(cls, v: list[str] | None) -> list[str] | None:
+        return list(dict.fromkeys(v)) if v is not None else None
 
     @field_validator("phone", check_fields=False)
     @classmethod
@@ -102,6 +117,10 @@ class BookingCreate(_BookingInput):
     table_id: int | None = Field(default=None, ge=1)
     duration_min: int = Field(default=bs.DEFAULT_DURATION, ge=30, le=240)
     source: Source = "web"
+    allergies: list[Allergen] = Field(default_factory=list, max_length=9)
+    dietary: Dietary = "none"
+    occasion: Occasion = "none"
+    special_requests: str | None = Field(default=None, max_length=bs.MAX_SPECIAL_REQUESTS)
 
 
 class LegacyBookingCreate(BookingCreate):
@@ -116,6 +135,11 @@ class BookingUpdate(_BookingInput):
     phone: str | None = Field(default=None, max_length=25)
     email: str | None = Field(default=None, max_length=254)
     zone: str | None = None
+    status: Status | None = None
+    allergies: list[Allergen] | None = Field(default=None, max_length=9)
+    dietary: Dietary | None = None
+    occasion: Occasion | None = None
+    special_requests: str | None = Field(default=None, max_length=bs.MAX_SPECIAL_REQUESTS)
 
 
 def _slug_path(description: str = "Restaurant slug, e.g. ember-vine"):

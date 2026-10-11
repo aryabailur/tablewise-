@@ -14,10 +14,18 @@ export interface Booking {
   id: number; code: string; restaurant_slug?: string; restaurant_name?: string; guest_name: string; phone: string | null; email: string | null;
   party_size: number; start_time: string; end_time: string; duration_min: number;
   table_id: number | null; table_name: string | null; zone: Zone | null;
-  status: 'confirmed' | 'cancelled'; source?: string | null; notes: string | null; created_at: string;
+  status: BookingStatus; source?: string | null; notes: string | null; created_at: string;
+  allergies?: Allergy[]; dietary?: Dietary; occasion?: Occasion; special_requests?: string | null;
 }
+export type BookingStatus = 'confirmed' | 'seated' | 'completed' | 'no_show' | 'cancelled';
+export type Allergy = 'nuts' | 'peanuts' | 'gluten' | 'dairy' | 'shellfish' | 'fish' | 'eggs' | 'soy' | 'sesame';
+export type Dietary = 'veg' | 'vegan' | 'jain' | 'halal' | 'none';
+export type Occasion = 'birthday' | 'anniversary' | 'business' | 'date' | 'none';
+export interface BookingExtras { allergies?: Allergy[]; dietary?: Dietary; occasion?: Occasion; special_requests?: string | null }
+export interface BookingPatch extends BookingExtras { status?: BookingStatus }
 export type BookingSource = 'web' | 'chat' | 'mcp' | 'google' | 'phone';
-export interface BookingCreate { guest_name: string; party_size: number; start_time: string; phone?: string; email?: string; notes?: string; zone?: Zone; table_id?: number; source?: BookingSource }
+export interface BookingCreate { guest_name: string; party_size: number; start_time: string; phone?: string; email?: string; notes?: string; zone?: Zone; table_id?: number; source?: BookingSource;
+  allergies?: Allergy[]; dietary?: Dietary; occasion?: Occasion; special_requests?: string }
 export interface Health { status: string; llm: boolean; model?: string | null; provider?: string | null; documents?: number | null; restaurants?: number | null }
 export type GraphNode = 'router' | 'retrieve' | 'booking_agent' | 'tools' | 'respond';
 export interface Source { index: number; source: string; section?: string | null; text: string; score?: number | null; restaurant_slug?: string | null }

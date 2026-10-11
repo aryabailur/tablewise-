@@ -3,6 +3,8 @@ import { motion } from 'framer-motion';
 import type { Booking } from '../lib/types';
 import { formatDay, hhmm } from '../lib/time';
 import { zoneLabel } from '../lib/zones';
+import { STATUS_LABEL, hasExtras, statusOf } from '../lib/booking';
+import { BookingExtrasView } from './BookingBits';
 
 function Barcode({ code }: { code: string }) {
   const bars = Array.from(code + code).map((c, i) => 1 + ((c.charCodeAt(0) * (i + 3)) % 4));
@@ -34,8 +36,10 @@ export default function Ticket({ booking, compact = false, action }: { booking: 
   const n = compact ? 9 : 15;
   const mask = `radial-gradient(circle ${n}px at 0 ${cutY}px, transparent ${n - 0.5}px, #000 ${n}px) left / 51% 100% no-repeat, radial-gradient(circle ${n}px at 100% ${cutY}px, transparent ${n - 0.5}px, #000 ${n}px) right / 51% 100% no-repeat`;
   const date = booking.start_time.slice(0, 10);
-  const cancelled = booking.status === 'cancelled' || action === 'cancelled';
-  const status = action === 'modified' ? 'Updated' : cancelled ? 'Cancelled' : 'Confirmed';
+  const st = action === 'cancelled' ? 'cancelled' : statusOf(booking);
+  const cancelled = st === 'cancelled';
+  const status = action === 'modified' && !cancelled ? 'Updated' : STATUS_LABEL[st];
+  const statusInk = st === 'confirmed' ? 'var(--ember)' : `color-mix(in oklab, var(--st-${st}) 70%, var(--ticket-ink))`;
   return (
     <motion.div
       initial={{ opacity: 0, y: 24, rotateX: -18, scale: 0.97 }}
@@ -49,7 +53,7 @@ export default function Ticket({ booking, compact = false, action }: { booking: 
         <div ref={topRef} className={compact ? 'px-5 pb-4 pt-4' : 'px-5 pb-6 pt-5 sm:px-7 sm:pb-7 sm:pt-6'}>
           <div className="flex items-center justify-between gap-3 text-[10px] font-semibold uppercase tracking-[0.2em] opacity-70 sm:tracking-[0.28em]">
             <span className="min-w-0 truncate">{booking.restaurant_name ?? 'Tablewise'}</span>
-            <span className={`flex shrink-0 items-center gap-1.5 ${cancelled ? 'text-danger' : 'text-ember'}`}>
+            <span className="flex shrink-0 items-center gap-1.5" style={{ color: statusInk }}>
               <span className="h-1.5 w-1.5 rounded-full bg-current" /> {status}
             </span>
           </div>
@@ -78,6 +82,11 @@ export default function Ticket({ booking, compact = false, action }: { booking: 
             </div>
           ))}
         </div>
+        {hasExtras(booking) && (
+          <div className={compact ? 'px-5 pb-4' : 'px-5 pb-5 sm:px-7 sm:pb-6'}>
+            <BookingExtrasView booking={booking} />
+          </div>
+        )}
         {!compact && (
           <div className="flex items-center justify-between gap-3 px-5 pb-5 opacity-70 sm:px-7 sm:pb-6">
             <Barcode code={booking.code} />
