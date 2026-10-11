@@ -1,5 +1,5 @@
 // Tablewise CI: backend lint + tests, RAG ingest smoke test, frontend build, packaged artifact,
-// and a build-status comment on any TAB-### Jira issue named in the latest commit message.
+// and a build-status comment on any TAB-### Jira issue named in the branch, PR or latest commit message.
 
 def notifyJira(String outcome) {
   try {
@@ -7,12 +7,15 @@ def notifyJira(String outcome) {
       withEnv(["BUILD_OUTCOME=${outcome}"]) {
         sh(label: 'Jira: comment on TAB issues', script: '''
           set +e
-          keys=$(git log -1 --pretty=%B | grep -oE 'TAB-[0-9]+' | sort -u)
-          if [ -z "$keys" ]; then echo "No TAB-### keys in the latest commit message"; exit 0; fi
+          # TAB keys from the branch name, PR branch/title and the latest commit message
+          keys=$(printf '%s\\n' "${BRANCH_NAME:-}" "${CHANGE_BRANCH:-}" "${CHANGE_TITLE:-}" "$(git log -1 --pretty=%B)" \\
+            | grep -oE 'TAB-[0-9]+' | sort -u)
+          if [ -z "$keys" ]; then echo "No TAB-### keys in the branch, PR or latest commit"; exit 0; fi
           if [ "$BUILD_OUTCOME" = "passed" ]; then icon='\\u2705'; else icon='\\u274c'; fi
+          branch="${CHANGE_BRANCH:-${BRANCH_NAME:-main}}"
           for key in $keys; do
-            printf '{"body":{"type":"doc","version":1,"content":[{"type":"paragraph","content":[{"type":"text","text":"Jenkins build #%s %s %s: %s"}]}]}}' \
-              "$BUILD_NUMBER" "$icon" "$BUILD_OUTCOME" "$BUILD_URL" > jira-comment.json
+            printf '{"body":{"type":"doc","version":1,"content":[{"type":"paragraph","content":[{"type":"text","text":"Jenkins build #%s %s %s on %s: %s"}]}]}}' \\
+              "$BUILD_NUMBER" "$icon" "$BUILD_OUTCOME" "$branch" "$BUILD_URL" > jira-comment.json
             code=$(curl -s -o jira-response.txt -w '%{http_code}' -u "$JIRA_EMAIL:$JT" \
               -H 'Content-Type: application/json' -X POST --data @jira-comment.json \
               "$JIRA_BASE/rest/api/3/issue/$key/comment")
@@ -54,7 +57,7 @@ pipeline {
     stage('Backend: Install') {
       steps {
         sh '''
-          export PIP_CACHE_DIR="$WORKSPACE/.cache/pip"
+          export PIP_CACHE_DIR="$HOME/.cache/pip"  # shared by all branch/PR jobs
           python3 -m venv .venv-ci
           . .venv-ci/bin/activate
           pip install -q --upgrade pip
@@ -83,7 +86,7 @@ pipeline {
       steps {
         sh '''
           . .venv-ci/bin/activate
-          export CHROMA_DIR="$(mktemp -d)" FASTEMBED_CACHE_DIR="$WORKSPACE/.cache/fastembed"
+          export CHROMA_DIR="$(mktemp -d)" FASTEMBED_CACHE_DIR="$HOME/.cache/fastembed"
           cd backend
           python -m app.seed
           python -c "from app import rag; n = rag.count(); print(f'chunks in collection: {n}'); assert n > 0"
@@ -96,7 +99,7 @@ pipeline {
       steps {
         dir('frontend') {
           sh '''
-            export npm_config_cache="$WORKSPACE/.cache/npm"
+            export npm_config_cache="$HOME/.cache/npm"
             npm ci --no-audit --no-fund
             npm run build
           '''

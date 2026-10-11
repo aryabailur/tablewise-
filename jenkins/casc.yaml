@@ -34,31 +34,39 @@ credentials:
               secret: ${JIRA_API_TOKEN}
 
 jobs:
-  - script: >
-      pipelineJob('tablewise') {
-        description('Tablewise CI: lint, tests, RAG ingest smoke test, frontend build, package')
-        properties {
-          pipelineTriggers {
-            triggers {
-              pollSCM {
-                scmpoll_spec('H/5 * * * *')
+  - script: |
+      multibranchPipelineJob('tablewise') {
+        description('Tablewise CI: every branch and pull request of the tablewise repo')
+        branchSources {
+          branchSource {
+            source {
+              github {
+                id('tablewise-github')
+                repoOwner('${GITHUB_OWNER}')
+                repository('tablewise')
+                repositoryUrl('https://github.com/${GITHUB_OWNER}/tablewise')
+                configuredByUrl(false)
+                credentialsId('github-token')
+                traits {
+                  gitHubBranchDiscovery {
+                    strategyId(3)
+                  }
+                  gitHubPullRequestDiscovery {
+                    strategyId(1)
+                  }
+                }
               }
             }
           }
         }
-        definition {
-          cpsScm {
-            scm {
-              git {
-                remote {
-                  url('https://github.com/${GITHUB_OWNER}/tablewise.git')
-                  credentials('github-token')
-                }
-                branch('*/main')
-              }
-            }
-            scriptPath('Jenkinsfile')
-            lightweight(true)
+        orphanedItemStrategy {
+          discardOldItems {
+            numToKeep(20)
+          }
+        }
+        triggers {
+          periodicFolderTrigger {
+            interval('5m')
           }
         }
       }
